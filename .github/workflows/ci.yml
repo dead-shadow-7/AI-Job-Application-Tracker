@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+
+    services:
+      postgres:
+        # Same image as docker-compose — the suite asserts pgvector is present.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: jobtracker
+          POSTGRES_PASSWORD: jobtracker
+          POSTGRES_DB: jobtracker
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U jobtracker"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    env:
+      # Two roles, mirroring production. Running the suite as the superuser
+      # would let every RLS isolation test pass without proving anything.
+      DATABASE_URL: postgresql+asyncpg://app_user:app_password@localhost:5432/jobtracker
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://jobtracker:jobtracker@localhost:5432/jobtracker
+      ENVIRONMENT: ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # Pinned to 3.12: the Phase 3 embedding stack has no wheels above it.
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Create the NOBYPASSRLS runtime role
+        # docker-compose does this via scripts/init-db.sql, which a GitHub
+        # Actions service container has no way to mount.
+        env:
+          PGPASSWORD: jobtracker
+        run: |
+          psql -h localhost -U jobtracker -d jobtracker -v ON_ERROR_STOP=1 -c \
+            "CREATE ROLE app_user LOGIN PASSWORD 'app_password' NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOINHERIT;"
+          psql -h localhost -U jobtracker -d jobtracker -v ON_ERROR_STOP=1 -c \
+            "GRANT CONNECT ON DATABASE jobtracker TO app_user;"
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Format check
+        run: ruff format --check .
+
+      - name: Type check
+        run: mypy app
+
+      - name: Test
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
