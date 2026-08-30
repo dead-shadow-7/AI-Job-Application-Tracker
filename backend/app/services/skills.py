@@ -48,6 +48,41 @@ class SkillResolution:
         return list(seen)
 
 
+async def extract_skills_from_text(session: AsyncSession, text: str) -> list[Skill]:
+    """Find every taxonomy skill named in a block of text.
+
+    Used on resumes, and deliberately the same deterministic mechanism used on
+    job postings: both sides of a match must be measured with one ruler. Asking
+    an LLM to list a resume's skills would introduce exactly the asymmetry that
+    makes a coverage percentage meaningless — a skill present in the resume but
+    phrased differently would read as a gap.
+
+    Matching is word-boundary anchored so "Java" does not match "JavaScript"
+    and "R" does not match every capital R in the document.
+    """
+    if not text.strip():
+        return []
+
+    haystack = normalize_token(text)
+    skills = (await session.execute(select(Skill))).scalars().all()
+
+    found: list[Skill] = []
+    for skill in skills:
+        candidates = {normalize_token(skill.name), *(normalize_token(a) for a in skill.aliases)}
+        for candidate in candidates:
+            if not candidate:
+                continue
+            # Single characters ("r", "c") are too collision-prone to match on
+            # word boundaries alone; require the canonical name for those.
+            if len(candidate) < 2 and candidate != normalize_token(skill.name):
+                continue
+            if re.search(rf"(?<!\w){re.escape(candidate)}(?!\w)", haystack):
+                found.append(skill)
+                break
+
+    return found
+
+
 async def resolve_skills(session: AsyncSession, mentions: list[str]) -> SkillResolution:
     """Resolve mentions against canonical names and aliases in one pass.
 

@@ -27,6 +27,15 @@ dependencies = [
     # Schema adherence is the entire value here; it should not be inferred.
     "langgraph>=0.2.60",
     "langsmith>=0.2",
+    # Phase 3. fastembed runs BAAI/bge-small-en-v1.5 locally on ONNX — no
+    # PyTorch, no API key, no per-call cost, and no third party sees a resume.
+    # This is why the image pins Python 3.12: onnxruntime publishes no wheels
+    # for 3.13/3.14.
+    "fastembed>=0.4",
+    "pgvector>=0.3",
+    "pypdf>=5.1",
+    "python-docx>=1.1",
+    "python-multipart>=0.0.20",  # FastAPI UploadFile for resume uploads
 ]
 
 [project.optional-dependencies]
