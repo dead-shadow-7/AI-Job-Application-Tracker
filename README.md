@@ -16,12 +16,17 @@ validated record back for review. Resume matching lands in Phase 3.
 | Backend | FastAPI + SQLAlchemy 2.0 async + Alembic |
 | Database | PostgreSQL 16 + pgvector (Supabase in deployment) |
 | Auth | Supabase Auth — magic link + Google |
-| LLM | Groq (`llama-3.3-70b-versatile`) — Phase 2 |
+| LLM | Groq `openai/gpt-oss-120b`, or Gemini — set `LLM_PROVIDER` |
 | Embeddings | fastembed + `BAAI/bge-small-en-v1.5`, local — Phase 3 |
 | Agent | LangGraph + LangSmith — Phase 2/4 |
 
-Groq serves no embedding models, which is why embeddings run locally rather than
-through the same provider. See the plan for the full reasoning.
+Neither Groq nor most chat providers serve embedding models, which is why
+embeddings run locally rather than through the same provider.
+
+The LLM is provider-neutral because free-tier budgets differ by two orders of
+magnitude: Groq allows 8,000 tokens/minute and is fast (~2–4s), Gemini caps on
+requests rather than tokens and is roomier but slower. Both speak the OpenAI
+dialect, so switching is a key, a base URL, and a model.
 
 ## Getting started
 
