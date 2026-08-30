@@ -83,3 +83,11 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+# Required for `from tests.factories import ...` to resolve.
+#
+# `python -m pytest` puts the working directory on sys.path; a bare `pytest`
+# does not. Relying on the former means the suite passes locally and fails in
+# CI with ModuleNotFoundError — which is exactly what happened. Declaring the
+# path here makes both invocations behave identically.
+pythonpath = ["."]

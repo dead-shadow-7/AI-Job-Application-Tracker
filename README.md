@@ -76,7 +76,7 @@ docker compose exec db psql -U app_user   -d jobtracker -c "SELECT count(*) FROM
 
 ```bash
 # Backend — all inside the container
-docker compose exec backend pytest -q
+docker compose exec backend pytest -q          # same invocation CI uses
 docker compose exec backend ruff check . && docker compose exec backend ruff format .
 docker compose exec backend mypy app
 docker compose exec backend alembic revision --autogenerate -m "message"
