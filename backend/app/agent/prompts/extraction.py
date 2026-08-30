@@ -41,9 +41,15 @@ when they are obviously implied.
 5. COMPANY. The employer doing the hiring. When a recruitment agency posts on \
 behalf of an unnamed client, use the client if named, otherwise the agency.
 
-6. TITLE. The role as written, minus location and seniority padding. \
-"Senior Backend Engineer - Bangalore (Remote)" is "Backend Engineer" with \
-seniority "senior" and location "Bangalore".
+6. TITLE. The role as written, minus location and seniority padding — but the \
+title must still read as a job on its own. Strip the seniority word only when \
+what remains names a role.
+   - "Senior Backend Engineer - Bangalore (Remote)" is "Backend Engineer", \
+seniority "senior", location "Bangalore".
+   - "AI/ML Intern" stays "AI/ML Intern", seniority "intern". Stripping it \
+would leave "AI/ML", which is a field, not a job.
+   - "Lead" and "Principal" are likewise part of the title when nothing \
+meaningful survives their removal.
 
 7. CONFIDENCE. Report honestly. Below 0.5 when the text is truncated, is not a \
 job posting at all, or forced you to guess repeatedly. This number gates \

@@ -20,8 +20,19 @@ class IngestRequest(BaseModel):
     source_platform: str | None = Field(default=None, max_length=60)
 
 
-class ExtractionWarning(BaseModel):
-    message: str
+class JobDraft(JobCreate):
+    """A preview, which may be incomplete.
+
+    ``JobCreate`` requires a company and title because a job cannot be saved
+    without them. A *draft* can lack both: postings that never name the employer
+    are common, and the honest result is an empty field the review screen asks
+    you to fill rather than a plausible guess or a failed ingestion.
+
+    The distinction is enforced where it belongs — at save time, by JobCreate.
+    """
+
+    company_name: str | None = None  # type: ignore[assignment]
+    title: str | None = None  # type: ignore[assignment]
 
 
 class IngestPreview(BaseModel):
@@ -34,7 +45,7 @@ class IngestPreview(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    job: JobCreate
+    job: JobDraft
     confidence: Decimal
     needs_review: bool
     warnings: list[str] = Field(default_factory=list)

@@ -76,12 +76,28 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
           <ConfidenceBadge value={Number(preview.confidence)} />
         </div>
 
+        {/* Highlighted when absent rather than merely blank. A posting that
+            never names its employer is common — on LinkedIn the company sits
+            above the description, not inside it — and the model is told not to
+            guess, so this is the one thing it routinely cannot supply. */}
         <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Company">
-            <input value={job.company_name ?? ''} onChange={set('company_name')} className={FIELD} />
+          <Field label="Company" required missing={!job.company_name}>
+            <input
+              required
+              value={job.company_name ?? ''}
+              onChange={set('company_name')}
+              placeholder="Not named in the posting — add it"
+              className={`${FIELD} ${!job.company_name ? 'border-amber-400 bg-amber-50/40' : ''}`}
+            />
           </Field>
-          <Field label="Role">
-            <input value={job.title ?? ''} onChange={set('title')} className={FIELD} />
+          <Field label="Role" required missing={!job.title}>
+            <input
+              required
+              value={job.title ?? ''}
+              onChange={set('title')}
+              placeholder="Not found — add it"
+              className={`${FIELD} ${!job.title ? 'border-amber-400 bg-amber-50/40' : ''}`}
+            />
           </Field>
         </div>
 
@@ -241,7 +257,12 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
         </button>
         <button
           type="button"
-          disabled={saving}
+          disabled={saving || !job.company_name?.trim() || !job.title?.trim()}
+          title={
+            !job.company_name?.trim() || !job.title?.trim()
+              ? 'Company and role are required to save'
+              : undefined
+          }
           onClick={() =>
             onSave({
               job: {
@@ -278,10 +299,14 @@ function ConfidenceBadge({ value }) {
   )
 }
 
-function Field({ label, hint, children }) {
+function Field({ label, hint, children, required, missing }) {
   return (
     <label className="block space-y-1.5">
-      <span className="block text-sm font-medium">{label}</span>
+      <span className="block text-sm font-medium">
+        {label}
+        {required && <span className="ml-1 text-rose-600" aria-label="required">*</span>}
+        {missing && <span className="ml-2 text-xs font-normal text-amber-700">needs your input</span>}
+      </span>
       {children}
       {hint && <span className="block text-xs text-ink-muted">{hint}</span>}
     </label>

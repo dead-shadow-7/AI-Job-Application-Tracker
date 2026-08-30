@@ -23,8 +23,8 @@ from app.core.exceptions import InvalidOperationError
 from app.models.application import Application
 from app.models.job import Job
 from app.schemas.extraction import ExtractedJob
-from app.schemas.ingest import IngestPreview, IngestRequest
-from app.schemas.job import JobCreate, RequirementIn
+from app.schemas.ingest import IngestPreview, IngestRequest, JobDraft
+from app.schemas.job import RequirementIn
 from app.services.applications import content_hash
 from app.services.skills import SkillResolution
 
@@ -66,7 +66,7 @@ async def ingest(payload: IngestRequest, user: CurrentUser, session: DbSession) 
     skills: SkillResolution = state.get("skills") or SkillResolution()
     usage = state.get("usage") or []
 
-    job = JobCreate(
+    job = JobDraft(
         company_name=extracted.company_name,
         title=extracted.title,
         seniority=extracted.seniority,

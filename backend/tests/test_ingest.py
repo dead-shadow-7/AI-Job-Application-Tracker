@@ -238,14 +238,24 @@ async def test_model_failure_surfaces_as_a_clear_error(
     assert "rate limit" in response.json()["detail"].lower()
 
 
-async def test_unusable_extraction_is_retried_once(
+async def test_a_failed_call_is_retried_once_then_succeeds(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A blank company or title means the model produced nothing usable, which
-    one more attempt at temperature 0 may fix. Dropped salary or skills are not
-    retried — validation already removed them, and asking again would most
-    likely reproduce the same invention at double the cost."""
-    stub = StubGroq(extraction(company_name="  ", title="  "))
+    """Only a call that produced nothing at all is worth retrying.
+
+    Dropped salary or skills are not: validation already removed them, and
+    asking again would most likely reproduce the same invention at double the
+    cost. Neither is an absent company — see the regression test below.
+    """
+
+    class FlakyStub(StubGroq):
+        async def extract(self, **kwargs: Any) -> StructuredResult:
+            if self.calls == 0:
+                self.calls += 1
+                raise LLMError("Groq returned 503: upstream unavailable")
+            return await super().extract(**kwargs)
+
+    stub = FlakyStub()
     monkeypatch.setattr("app.agent.graphs.ingestion.groq_client", stub)
     monkeypatch.setattr("app.api.v1.ingest.groq_client", stub)
     user = await Session(client).start()
@@ -253,7 +263,8 @@ async def test_unusable_extraction_is_retried_once(
     response = await user.post("/api/v1/jobs/ingest", {"raw_text": POSTING})
 
     assert stub.calls == 2
-    assert response.status_code == 422
+    assert response.status_code == 200
+    assert response.json()["job"]["company_name"] == "Razorpay"
 
 
 async def test_duplicate_posting_is_detected(client: AsyncClient, stub: StubGroq) -> None:
@@ -290,3 +301,47 @@ async def test_preview_can_be_saved_directly(client: AsyncClient, stub: StubGroq
 async def test_ingest_requires_authentication(client: AsyncClient) -> None:
     response = await client.post("/api/v1/jobs/ingest", json={"raw_text": POSTING})
     assert response.status_code == 401
+
+
+async def test_posting_that_never_names_the_company_still_previews(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: a LinkedIn "About the job" body usually omits the employer,
+    which lives in the page chrome rather than the description.
+
+    The prompt forbids inventing, so the model correctly returns null. When
+    company_name was declared non-nullable, strict mode rejected that correct
+    answer with a 400 and the retry spent the remaining token budget — turning
+    an honest "I could not find it" into a failed ingestion.
+    """
+    stub = StubGroq(extraction(company_name=None, title=None))
+    monkeypatch.setattr("app.agent.graphs.ingestion.groq_client", stub)
+    monkeypatch.setattr("app.api.v1.ingest.groq_client", stub)
+    user = await Session(client).start()
+
+    response = await user.post("/api/v1/jobs/ingest", {"raw_text": POSTING})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["job"]["company_name"] is None
+    assert body["needs_review"] is True
+    assert any("never names the company" in w for w in body["warnings"])
+    assert stub.calls == 1, "a genuinely absent company must not trigger a retry"
+
+
+async def test_missing_company_is_rejected_at_save_not_at_preview(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The draft/create split: previews may be incomplete, saved jobs may not."""
+    stub = StubGroq(extraction(company_name=None))
+    monkeypatch.setattr("app.agent.graphs.ingestion.groq_client", stub)
+    monkeypatch.setattr("app.api.v1.ingest.groq_client", stub)
+    user = await Session(client).start()
+    preview = (await user.post("/api/v1/jobs/ingest", {"raw_text": POSTING})).json()
+
+    rejected = await user.post("/api/v1/applications", {"job": preview["job"]})
+    preview["job"]["company_name"] = "Fractal Analytics"
+    accepted = await user.post("/api/v1/applications", {"job": preview["job"]})
+
+    assert rejected.status_code == 422
+    assert accepted.status_code == 201

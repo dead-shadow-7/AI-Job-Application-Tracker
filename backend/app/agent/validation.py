@@ -144,15 +144,26 @@ def _validate_experience(extracted: ExtractedJob, report: ValidationReport) -> N
 def _validate_company_and_title(
     extracted: ExtractedJob, haystack: str, report: ValidationReport
 ) -> None:
-    """A company name absent from the posting is usually a hallucinated brand.
+    """Flag a company or title that is missing, or that the posting never says.
 
-    Only warned about, never cleared: the company is required, and a wrong name
-    the user can correct beats an empty record they cannot identify.
+    Neither is cleared. A wrong name you can correct beats an empty record you
+    cannot identify, and a genuinely absent one is worth stating plainly — many
+    postings (LinkedIn "About the job" bodies especially) simply never name the
+    employer, because it lives in the page chrome rather than the description.
     """
-    if _normalize(extracted.company_name) not in haystack:
+    if not extracted.company_name or not extracted.company_name.strip():
+        report.warnings.append(
+            "The posting text never names the company — add it before saving. "
+            "On LinkedIn it usually sits above the description rather than in it."
+        )
+    elif _normalize(extracted.company_name) not in haystack:
         report.warnings.append(
             f"Company {extracted.company_name!r} does not appear in the posting text — confirm it."
         )
+
+    if not extracted.title or not extracted.title.strip():
+        report.warnings.append("No role title was found in the posting — add one before saving.")
+        return
 
     # The title is legitimately reworded ("Senior Backend Engineer" -> "Backend
     # Engineer"), so match on the longest word instead of the whole string.

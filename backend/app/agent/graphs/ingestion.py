@@ -150,9 +150,12 @@ def should_retry(state: IngestionState) -> str:
     extracted = state.get("extracted")
     attempts = state.get("attempts", 0)
 
-    unusable = (
-        extracted is None or not extracted.company_name.strip() or not extracted.title.strip()
-    )
+    # A missing company or title is *not* unusable. The posting genuinely may
+    # not name them, the prompt forbids inventing, and the review screen asks
+    # for what is missing. Retrying would spend a second call to be told the
+    # same true thing — and on the free tier's 8000 TPM budget, that second call
+    # is what turns a working ingestion into a rate-limit failure.
+    unusable = extracted is None
 
     if unusable and attempts < MAX_EXTRACTION_ATTEMPTS:
         logger.info("Retrying extraction (attempt %d)", attempts + 1)
@@ -165,6 +168,10 @@ def should_retry(state: IngestionState) -> str:
 async def resolve_company_node(state: IngestionState) -> dict[str, Any]:
     extracted = state["extracted"]
     assert extracted is not None
+    # May be absent: plenty of postings never name the employer, and the model
+    # is told to return null rather than guess.
+    if not extracted.company_name:
+        return {"company_normalized": ""}
     return {"company_normalized": normalize_company_name(extracted.company_name)}
 
 

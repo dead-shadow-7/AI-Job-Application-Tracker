@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 # Bump when the prompt or this schema changes in a way that alters output.
 # Stored on every job so historical extractions stay interpretable and the eval
 # suite can attribute a regression to a specific version.
-EXTRACTION_PROMPT_VERSION = "2026-08-30.1"
+EXTRACTION_PROMPT_VERSION = "2026-08-30.2"
 
 
 class ExtractedSalary(BaseModel):
@@ -66,8 +66,29 @@ class ExtractedRequirement(BaseModel):
 class ExtractedJob(BaseModel):
     """One job posting, fully structured."""
 
-    company_name: str = Field(description="The hiring company. Not the recruiting agency.")
-    title: str = Field(description="The role title, without seniority padding or location.")
+    # Nullable, despite both being required to save a job.
+    #
+    # A LinkedIn "About the job" body frequently never names the employer — it
+    # lives in the page chrome, not the description — and plenty of postings
+    # open with "join our team". The prompt forbids inventing, so the model
+    # correctly returns null; declaring these non-nullable made strict mode
+    # reject that correct answer with a 400 and retry into the rate limit.
+    #
+    # An extraction that admits it could not find the company is useful. The
+    # review screen asks for it, which is a far better outcome than a
+    # confidently wrong employer or a failed ingestion.
+    company_name: str | None = Field(
+        description=(
+            "The hiring company, not the recruiting agency. Null if the posting "
+            "text never names it — do not guess from the role or the writing style."
+        )
+    )
+    title: str | None = Field(
+        description=(
+            "The role title, without seniority padding or location. Null if the "
+            "posting text contains no title."
+        )
+    )
 
     seniority: Literal["intern", "junior", "mid", "senior", "staff", "lead", "principal"] | None = (
         Field(description="Inferred from title and required years. Null if genuinely unclear.")
