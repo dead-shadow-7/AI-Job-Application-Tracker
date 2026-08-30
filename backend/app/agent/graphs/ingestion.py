@@ -19,7 +19,7 @@ from typing import Annotated, Any, TypedDict
 from langgraph.graph import END, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.groq_client import GroqClient, LLMError, LLMUsage, groq_client
+from app.agent.llm_client import LLMClient, LLMError, LLMUsage, llm_client
 from app.agent.prompts.extraction import (
     EXTRACTION_SYSTEM_PROMPT,
     build_extraction_user_prompt,
@@ -109,7 +109,7 @@ async def normalize_node(state: IngestionState) -> dict[str, Any]:
 
 
 async def extract_node(state: IngestionState) -> dict[str, Any]:
-    client: GroqClient = state["client"]
+    client: LLMClient = state["client"]
     attempts = state.get("attempts", 0)
 
     try:
@@ -117,7 +117,7 @@ async def extract_node(state: IngestionState) -> dict[str, Any]:
             schema=ExtractedJob,
             system=EXTRACTION_SYSTEM_PROMPT,
             user=build_extraction_user_prompt(state["cleaned_text"], state.get("url")),
-            model=settings.groq_extraction_model,
+            model=settings.extraction_model,
         )
     except LLMError as exc:
         return {"attempts": attempts + 1, "extracted": None, "error": str(exc)}
@@ -243,7 +243,7 @@ async def run_ingestion(
     raw_text: str,
     url: str | None = None,
     source_platform: str | None = None,
-    client: GroqClient | None = None,
+    client: LLMClient | None = None,
     user_id: str | None = None,
 ) -> IngestionState:
     result = await get_ingestion_graph().ainvoke(
@@ -252,7 +252,7 @@ async def run_ingestion(
             "url": url,
             "source_platform": source_platform,
             "session": session,
-            "client": client or groq_client,
+            "client": client or llm_client,
             "usage": [],
         },
         # Tagged so a run can be found in LangSmith by user or platform when

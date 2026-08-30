@@ -40,44 +40,45 @@ async def configure_tracing() -> bool:
         os.environ["LANGSMITH_TRACING"] = "false"
         return False
 
-    verdict = await _check_credential(settings.langsmith_api_key)
+    verdict = await _check_credential(settings.langsmith_api_key, settings.langsmith_endpoint)
     if verdict is False:
-        # The usual cause is key *type*, not a bad paste. LangSmith issues two
-        # kinds: personal access tokens (lsv2_pt_), scoped to a user, and
-        # service keys (lsv2_sk_), scoped to a workspace. Run ingestion writes
-        # into a workspace project, so a personal token is refused with a bare
-        # 403 that says nothing about why.
-        hint = (
-            "That key is a personal access token (lsv2_pt_). Run ingestion "
-            "needs a workspace-scoped Service Key (lsv2_sk_) — create one at "
-            "smith.langchain.com > Settings > API keys > Service Keys."
-            if settings.langsmith_api_key.startswith("lsv2_pt_")
-            else f"Check the key belongs to the workspace holding project "
-            f"{settings.langsmith_project!r}."
+        # Almost always a region mismatch rather than a bad key. LangSmith runs
+        # separate US, EU and APAC deployments, and a key issued in one is
+        # refused by another with a plain 403 that says nothing about
+        # geography — indistinguishable from an invalid credential.
+        logger.error(
+            "LangSmith rejected the API key against %s, so tracing is disabled. "
+            "Most often this is the wrong regional endpoint rather than a bad "
+            "key: US is https://api.smith.langchain.com, EU is "
+            "https://eu.api.smith.langchain.com, APAC is "
+            "https://apac.api.smith.langchain.com. Copy LANGSMITH_ENDPOINT from "
+            "the same setup screen as the key.",
+            settings.langsmith_endpoint,
         )
-        logger.error("LangSmith rejected the API key, so tracing is disabled. %s", hint)
         os.environ["LANGSMITH_TRACING"] = "false"
         return False
 
     os.environ["LANGSMITH_TRACING"] = "true"
     os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
+    os.environ["LANGSMITH_ENDPOINT"] = settings.langsmith_endpoint
     os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project
     logger.info(
-        "LangSmith tracing enabled (project=%s, key %s)",
+        "LangSmith tracing enabled (project=%r, endpoint=%s, key %s)",
         settings.langsmith_project,
+        settings.langsmith_endpoint,
         "verified" if verdict else "unverified — LangSmith unreachable",
     )
     return True
 
 
-async def _check_credential(api_key: str) -> bool | None:
+async def _check_credential(api_key: str, endpoint: str) -> bool | None:
     """True if accepted, False if rejected, None if it could not be determined."""
     import httpx
 
     try:
         async with httpx.AsyncClient(timeout=5.0) as client:
             response = await client.get(
-                "https://api.smith.langchain.com/sessions",
+                f"{endpoint.rstrip('/')}/sessions",
                 headers={"x-api-key": api_key},
                 params={"limit": 1},
             )
@@ -99,7 +100,7 @@ def run_metadata(
     """
     metadata: dict[str, object] = {
         "prompt_version": None,
-        "model": settings.groq_extraction_model,
+        "model": settings.extraction_model,
         "environment": settings.environment,
     }
     if user_id:

@@ -49,10 +49,10 @@ class StructuredResult[TModel: BaseModel](BaseModel):
     usage: LLMUsage
 
 
-class GroqClient:
+class LLMClient:
     def __init__(self, api_key: str | None = None, base_url: str | None = None) -> None:
-        self._api_key = api_key if api_key is not None else settings.groq_api_key
-        self._base_url = (base_url or settings.groq_base_url).rstrip("/")
+        self._api_key = api_key if api_key is not None else settings.llm_api_key
+        self._base_url = (base_url or settings.llm_base_url).rstrip("/")
 
     @property
     def is_configured(self) -> bool:
@@ -77,7 +77,7 @@ class GroqClient:
         if not self.is_configured:
             raise LLMError("GROQ_API_KEY is not set.")
 
-        target_model = model or settings.groq_extraction_model
+        target_model = model or settings.extraction_model
         payload: dict[str, Any] = {
             "model": target_model,
             "temperature": temperature,
@@ -85,7 +85,7 @@ class GroqClient:
             # so an optimistic ceiling here fails the request outright on the
             # free tier rather than merely allowing a long answer. A full
             # extraction runs well under 3k.
-            "max_completion_tokens": max_tokens or settings.groq_max_output_tokens,
+            "max_completion_tokens": max_tokens or settings.llm_max_output_tokens,
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -114,8 +114,8 @@ class GroqClient:
     async def _post(self, payload: dict[str, Any], model: str) -> tuple[dict[str, Any], LLMUsage]:
         last_error: Exception | None = None
 
-        async with httpx.AsyncClient(timeout=settings.groq_timeout_seconds) as client:
-            for attempt in range(settings.groq_max_retries):
+        async with httpx.AsyncClient(timeout=settings.llm_timeout_seconds) as client:
+            for attempt in range(settings.llm_max_retries):
                 try:
                     response = await client.post(
                         f"{self._base_url}/chat/completions",
@@ -146,7 +146,7 @@ class GroqClient:
                         "Groq %s (attempt %d/%d): %s",
                         response.status_code,
                         attempt + 1,
-                        settings.groq_max_retries,
+                        settings.llm_max_retries,
                         message,
                     )
                     # Honour Retry-After when the limiter supplies it; guessing
@@ -157,7 +157,7 @@ class GroqClient:
                 logger.error("Groq %s rejected the request: %s", response.status_code, message)
                 raise LLMError(message)
 
-        raise LLMError(f"Groq unreachable after {settings.groq_max_retries} attempts: {last_error}")
+        raise LLMError(f"Groq unreachable after {settings.llm_max_retries} attempts: {last_error}")
 
     @staticmethod
     def _error_message(response: httpx.Response) -> str:
@@ -191,4 +191,4 @@ class GroqClient:
         await asyncio.sleep(min(2**attempt, 8))
 
 
-groq_client = GroqClient()
+llm_client = LLMClient()

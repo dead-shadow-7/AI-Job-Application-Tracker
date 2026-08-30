@@ -13,7 +13,7 @@ from typing import Any
 import pytest
 from httpx import AsyncClient
 
-from app.agent.groq_client import LLMError, LLMUsage, StructuredResult
+from app.agent.llm_client import LLMError, LLMUsage, StructuredResult
 from app.schemas.extraction import ExtractedJob, ExtractedRequirement, ExtractedSalary
 from tests.factories import Session
 
@@ -67,7 +67,7 @@ def extraction(**overrides: Any) -> ExtractedJob:
     return ExtractedJob(**defaults)
 
 
-class StubGroq:
+class StubLLM:
     def __init__(self, result: ExtractedJob | None = None, error: Exception | None = None) -> None:
         self._result = result if result is not None else extraction()
         self._error = error
@@ -91,16 +91,16 @@ class StubGroq:
 
 
 @pytest.fixture
-def stub(monkeypatch: pytest.MonkeyPatch) -> StubGroq:
+def stub(monkeypatch: pytest.MonkeyPatch) -> StubLLM:
     """Patched where it is looked up — the graph resolves the module global at
     call time, and the endpoint checks its own import for configuration."""
-    client = StubGroq()
-    monkeypatch.setattr("app.agent.graphs.ingestion.groq_client", client)
-    monkeypatch.setattr("app.api.v1.ingest.groq_client", client)
+    client = StubLLM()
+    monkeypatch.setattr("app.agent.graphs.ingestion.llm_client", client)
+    monkeypatch.setattr("app.api.v1.ingest.llm_client", client)
     return client
 
 
-async def test_ingest_returns_a_reviewable_preview(client: AsyncClient, stub: StubGroq) -> None:
+async def test_ingest_returns_a_reviewable_preview(client: AsyncClient, stub: StubLLM) -> None:
     user = await Session(client).start()
 
     response = await user.post("/api/v1/jobs/ingest", {"raw_text": POSTING})
@@ -114,7 +114,7 @@ async def test_ingest_returns_a_reviewable_preview(client: AsyncClient, stub: St
     assert body["needs_review"] is False
 
 
-async def test_ingest_writes_nothing(client: AsyncClient, stub: StubGroq) -> None:
+async def test_ingest_writes_nothing(client: AsyncClient, stub: StubLLM) -> None:
     """Extraction is good, not perfect. A wrong row saved silently costs far
     more to find later than an edit made now."""
     user = await Session(client).start()
@@ -125,7 +125,7 @@ async def test_ingest_writes_nothing(client: AsyncClient, stub: StubGroq) -> Non
 
 
 async def test_extracted_skills_resolve_to_canonical_slugs(
-    client: AsyncClient, stub: StubGroq
+    client: AsyncClient, stub: StubLLM
 ) -> None:
     user = await Session(client).start()
 
@@ -146,9 +146,9 @@ async def test_alias_spellings_resolve(
 ) -> None:
     """'Golang' and 'ReactJS' must land on the same rows as 'Go' and 'React',
     or the Phase 3 match score counts one skill as two."""
-    stub = StubGroq(extraction(skills=["Golang", "ReactJS", "Postgres", "K8s"]))
-    monkeypatch.setattr("app.agent.graphs.ingestion.groq_client", stub)
-    monkeypatch.setattr("app.api.v1.ingest.groq_client", stub)
+    stub = StubLLM(extraction(skills=["Golang", "ReactJS", "Postgres", "K8s"]))
+    monkeypatch.setattr("app.agent.graphs.ingestion.llm_client", stub)
+    monkeypatch.setattr("app.api.v1.ingest.llm_client", stub)
     user = await Session(client).start()
 
     posting = POSTING + "\nAlso Golang, ReactJS, Postgres and K8s.\n"
@@ -161,9 +161,9 @@ async def test_unknown_skills_are_reported_not_invented(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A taxonomy that grows on every typo stops being a taxonomy."""
-    stub = StubGroq(extraction(skills=["Python", "Blorptron"]))
-    monkeypatch.setattr("app.agent.graphs.ingestion.groq_client", stub)
-    monkeypatch.setattr("app.api.v1.ingest.groq_client", stub)
+    stub = StubLLM(extraction(skills=["Python", "Blorptron"]))
+    monkeypatch.setattr("app.agent.graphs.ingestion.llm_client", stub)
+    monkeypatch.setattr("app.api.v1.ingest.llm_client", stub)
     user = await Session(client).start()
 
     body = (
@@ -177,7 +177,7 @@ async def test_unknown_skills_are_reported_not_invented(
 async def test_hallucinated_salary_is_stripped_and_flagged(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    stub = StubGroq(
+    stub = StubLLM(
         extraction(
             salary=ExtractedSalary(
                 raw_text="₹80,00,000 per annum",
@@ -188,8 +188,8 @@ async def test_hallucinated_salary_is_stripped_and_flagged(
             )
         )
     )
-    monkeypatch.setattr("app.agent.graphs.ingestion.groq_client", stub)
-    monkeypatch.setattr("app.api.v1.ingest.groq_client", stub)
+    monkeypatch.setattr("app.agent.graphs.ingestion.llm_client", stub)
+    monkeypatch.setattr("app.api.v1.ingest.llm_client", stub)
     user = await Session(client).start()
 
     body = (await user.post("/api/v1/jobs/ingest", {"raw_text": POSTING})).json()
@@ -202,9 +202,9 @@ async def test_hallucinated_salary_is_stripped_and_flagged(
 async def test_low_confidence_forces_review(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    stub = StubGroq(extraction(confidence=0.4))
-    monkeypatch.setattr("app.agent.graphs.ingestion.groq_client", stub)
-    monkeypatch.setattr("app.api.v1.ingest.groq_client", stub)
+    stub = StubLLM(extraction(confidence=0.4))
+    monkeypatch.setattr("app.agent.graphs.ingestion.llm_client", stub)
+    monkeypatch.setattr("app.api.v1.ingest.llm_client", stub)
     user = await Session(client).start()
 
     body = (await user.post("/api/v1/jobs/ingest", {"raw_text": POSTING})).json()
@@ -213,7 +213,7 @@ async def test_low_confidence_forces_review(
 
 
 async def test_too_short_input_is_rejected_before_spending_tokens(
-    client: AsyncClient, stub: StubGroq
+    client: AsyncClient, stub: StubLLM
 ) -> None:
     user = await Session(client).start()
 
@@ -227,9 +227,9 @@ async def test_too_short_input_is_rejected_before_spending_tokens(
 async def test_model_failure_surfaces_as_a_clear_error(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    stub = StubGroq(error=LLMError("Groq rate limit reached. Limit 8000 TPM."))
-    monkeypatch.setattr("app.agent.graphs.ingestion.groq_client", stub)
-    monkeypatch.setattr("app.api.v1.ingest.groq_client", stub)
+    stub = StubLLM(error=LLMError("Groq rate limit reached. Limit 8000 TPM."))
+    monkeypatch.setattr("app.agent.graphs.ingestion.llm_client", stub)
+    monkeypatch.setattr("app.api.v1.ingest.llm_client", stub)
     user = await Session(client).start()
 
     response = await user.post("/api/v1/jobs/ingest", {"raw_text": POSTING})
@@ -248,7 +248,7 @@ async def test_a_failed_call_is_retried_once_then_succeeds(
     cost. Neither is an absent company — see the regression test below.
     """
 
-    class FlakyStub(StubGroq):
+    class FlakyStub(StubLLM):
         async def extract(self, **kwargs: Any) -> StructuredResult:
             if self.calls == 0:
                 self.calls += 1
@@ -256,8 +256,8 @@ async def test_a_failed_call_is_retried_once_then_succeeds(
             return await super().extract(**kwargs)
 
     stub = FlakyStub()
-    monkeypatch.setattr("app.agent.graphs.ingestion.groq_client", stub)
-    monkeypatch.setattr("app.api.v1.ingest.groq_client", stub)
+    monkeypatch.setattr("app.agent.graphs.ingestion.llm_client", stub)
+    monkeypatch.setattr("app.api.v1.ingest.llm_client", stub)
     user = await Session(client).start()
 
     response = await user.post("/api/v1/jobs/ingest", {"raw_text": POSTING})
@@ -267,7 +267,7 @@ async def test_a_failed_call_is_retried_once_then_succeeds(
     assert response.json()["job"]["company_name"] == "Razorpay"
 
 
-async def test_duplicate_posting_is_detected(client: AsyncClient, stub: StubGroq) -> None:
+async def test_duplicate_posting_is_detected(client: AsyncClient, stub: StubLLM) -> None:
     """Catches pasting the same posting twice, or finding one job on two
     boards, before it becomes a second timeline."""
     user = await Session(client).start()
@@ -280,7 +280,7 @@ async def test_duplicate_posting_is_detected(client: AsyncClient, stub: StubGroq
     assert again["duplicate_of"] == created.json()["id"]
 
 
-async def test_preview_can_be_saved_directly(client: AsyncClient, stub: StubGroq) -> None:
+async def test_preview_can_be_saved_directly(client: AsyncClient, stub: StubLLM) -> None:
     """The preview's `job` is exactly the create endpoint's payload, so review
     and save is an edit rather than a translation."""
     user = await Session(client).start()
@@ -314,9 +314,9 @@ async def test_posting_that_never_names_the_company_still_previews(
     answer with a 400 and the retry spent the remaining token budget — turning
     an honest "I could not find it" into a failed ingestion.
     """
-    stub = StubGroq(extraction(company_name=None, title=None))
-    monkeypatch.setattr("app.agent.graphs.ingestion.groq_client", stub)
-    monkeypatch.setattr("app.api.v1.ingest.groq_client", stub)
+    stub = StubLLM(extraction(company_name=None, title=None))
+    monkeypatch.setattr("app.agent.graphs.ingestion.llm_client", stub)
+    monkeypatch.setattr("app.api.v1.ingest.llm_client", stub)
     user = await Session(client).start()
 
     response = await user.post("/api/v1/jobs/ingest", {"raw_text": POSTING})
@@ -333,9 +333,9 @@ async def test_missing_company_is_rejected_at_save_not_at_preview(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The draft/create split: previews may be incomplete, saved jobs may not."""
-    stub = StubGroq(extraction(company_name=None))
-    monkeypatch.setattr("app.agent.graphs.ingestion.groq_client", stub)
-    monkeypatch.setattr("app.api.v1.ingest.groq_client", stub)
+    stub = StubLLM(extraction(company_name=None))
+    monkeypatch.setattr("app.agent.graphs.ingestion.llm_client", stub)
+    monkeypatch.setattr("app.api.v1.ingest.llm_client", stub)
     user = await Session(client).start()
     preview = (await user.post("/api/v1/jobs/ingest", {"raw_text": POSTING})).json()
 

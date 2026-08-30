@@ -16,7 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.graphs.ingestion import run_ingestion
-from app.agent.groq_client import groq_client
+from app.agent.llm_client import llm_client
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import settings
 from app.core.exceptions import InvalidOperationError
@@ -44,7 +44,7 @@ REVIEW_CONFIDENCE_THRESHOLD = 0.75
     summary="Extract a job posting from pasted text (does not save)",
 )
 async def ingest(payload: IngestRequest, user: CurrentUser, session: DbSession) -> IngestPreview:
-    if not groq_client.is_configured:
+    if not llm_client.is_configured:
         raise InvalidOperationError(
             "GROQ_API_KEY is not set, so extraction is unavailable. "
             "Add a job by hand, or set the key and restart the API."
@@ -100,7 +100,7 @@ async def ingest(payload: IngestRequest, user: CurrentUser, session: DbSession) 
         warnings=report.warnings,
         dropped_fields=report.dropped_fields,
         unmatched_skills=skills.unmatched,
-        model=settings.groq_extraction_model,
+        model=settings.extraction_model,
         prompt_version=state["prompt_version"],
         tokens_used=sum(u.total_tokens for u in usage),
         latency_ms=sum(u.latency_ms for u in usage),

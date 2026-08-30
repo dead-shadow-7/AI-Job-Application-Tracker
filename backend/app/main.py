@@ -29,7 +29,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     logger.info(
         "Starting AI Job Tracker API (env=%s, model=%s, tracing=%s)",
         settings.environment,
-        settings.groq_extraction_model,
+        settings.extraction_model,
         "on" if tracing else "off",
     )
     yield

@@ -44,25 +44,70 @@ class Settings(BaseSettings):
     )
 
     # --- LLM (Phase 2) ----------------------------------------------------
+    # Provider-neutral because the free-tier budgets differ by two orders of
+    # magnitude: Groq allows 8000 tokens per minute, which a bulk import of a
+    # spreadsheet will exhaust, while Gemini's free tier is capped on requests
+    # rather than tokens. Both speak the OpenAI dialect, so switching is a base
+    # URL, a key, and a model.
+    #
+    # The constraint that rules out most alternatives is strict `json_schema`
+    # response_format — schema adherence by construction rather than by parsing
+    # and hoping. Extraction is worthless without it.
+    llm_provider: Literal["groq", "gemini"] = "groq"
+
     # Verified against Groq's live model list, not the docs: the Llama chat
     # models are gone (only prompt-guard moderation variants remain), and
-    # strict `json_schema` response_format — schema adherence by construction
-    # rather than by parsing and hoping — is supported only by the gpt-oss and
-    # qwen families. Extraction is worthless without it.
+    # strict json_schema is supported only by the gpt-oss and qwen families.
     groq_api_key: str = ""
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_extraction_model: str = "openai/gpt-oss-120b"
     groq_fast_model: str = "openai/gpt-oss-20b"
-    groq_timeout_seconds: float = 90.0
-    groq_max_retries: int = 3
-    # Counted against the tokens-per-minute budget before generation starts, so
-    # this is a real cost knob rather than just a safety ceiling. The free tier
-    # allows 8000 TPM; a full extraction fits comfortably in 3000.
-    groq_max_output_tokens: int = 3000
+
+    # Gemini's OpenAI-compatible endpoint. Slower than Groq (~4-8s vs ~2-4s)
+    # but the free tier is token-generous enough that the practical limit
+    # becomes requests per minute, which a human pasting jobs will never reach.
+    gemini_api_key: str = ""
+    gemini_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai"
+    gemini_extraction_model: str = "gemini-2.5-flash"
+    gemini_fast_model: str = "gemini-2.5-flash-lite"
+
+    @property
+    def llm_api_key(self) -> str:
+        return self.gemini_api_key if self.llm_provider == "gemini" else self.groq_api_key
+
+    @property
+    def llm_base_url(self) -> str:
+        return self.gemini_base_url if self.llm_provider == "gemini" else self.groq_base_url
+
+    @property
+    def extraction_model(self) -> str:
+        if self.llm_provider == "gemini":
+            return self.gemini_extraction_model
+        return self.groq_extraction_model
+
+    @property
+    def fast_model(self) -> str:
+        return self.gemini_fast_model if self.llm_provider == "gemini" else self.groq_fast_model
+
+    # Provider-independent request settings.
+    llm_timeout_seconds: float = 90.0
+    llm_max_retries: int = 3
+    # Counted against a tokens-per-minute budget *before* generation starts, so
+    # this is a real cost knob rather than just a safety ceiling. Groq's free
+    # tier allows 8000 TPM; a full extraction fits comfortably in 3000.
+    llm_max_output_tokens: int = 3000
 
     # --- Observability ----------------------------------------------------
+    # The endpoint is regional and is not optional. A key issued in one region
+    # is refused by another with a bare 403 that mentions nothing about
+    # geography, which reads exactly like an invalid key. Copy the endpoint from
+    # the same LangSmith setup screen as the key.
+    #   US (default) https://api.smith.langchain.com
+    #   EU           https://eu.api.smith.langchain.com
+    #   APAC         https://apac.api.smith.langchain.com
     langsmith_tracing: bool = False
     langsmith_api_key: str = ""
+    langsmith_endpoint: str = "https://api.smith.langchain.com"
     langsmith_project: str = "ai-job-tracker"
 
     # --- Embeddings (Phase 3) --------------------------------------------
