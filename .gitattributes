@@ -1,0 +1,10 @@
+# Normalise line endings in the repository to LF regardless of platform.
+# Without this, files authored on Windows land in the tree with CRLF and the
+# Linux containers that run lint, migrations and CI see spurious diffs.
+* text=auto eol=lf
+
+# Binary — never touch.
+*.png binary
+*.jpg binary
+*.ico binary
+*.pdf binary

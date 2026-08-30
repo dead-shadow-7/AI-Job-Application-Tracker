@@ -1,0 +1,43 @@
+name: ai-job-tracker
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: jobtracker
+      POSTGRES_PASSWORD: jobtracker
+      POSTGRES_DB: jobtracker
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/scripts/init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jobtracker -d jobtracker"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - .env
+    environment:
+      # Override so the container reaches the db service, not localhost.
+      # app_user is NOBYPASSRLS — see backend/scripts/init-db.sql.
+      DATABASE_URL: postgresql+asyncpg://app_user:app_password@db:5432/jobtracker
+      MIGRATION_DATABASE_URL: postgresql+asyncpg://jobtracker:jobtracker@db:5432/jobtracker
+    ports:
+      - "8000:8000"
+    volumes:
+      # Bind-mount source for hot reload; keep the image's venv out of the way.
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  pgdata:
