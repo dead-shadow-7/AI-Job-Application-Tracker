@@ -1,0 +1,25 @@
+@import 'tailwindcss';
+
+/* Design tokens. Kept as CSS variables rather than hard-coded Tailwind classes
+   so the Phase 1 dashboard, the Phase 3 score meters, and the Phase 4 timeline
+   all read from one palette instead of drifting apart. */
+@theme {
+  --color-surface: oklch(100% 0 0);
+  --color-surface-muted: oklch(97% 0.004 260);
+  --color-border-subtle: oklch(92% 0.006 260);
+  --color-ink: oklch(22% 0.015 260);
+  --color-ink-muted: oklch(52% 0.012 260);
+  --color-accent: oklch(55% 0.17 258);
+  --color-accent-hover: oklch(48% 0.17 258);
+}
+
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    @apply bg-surface-muted text-ink antialiased;
+    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  }
+}
