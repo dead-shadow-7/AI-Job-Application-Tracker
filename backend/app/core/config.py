@@ -44,9 +44,26 @@ class Settings(BaseSettings):
     )
 
     # --- LLM (Phase 2) ----------------------------------------------------
+    # Verified against Groq's live model list, not the docs: the Llama chat
+    # models are gone (only prompt-guard moderation variants remain), and
+    # strict `json_schema` response_format — schema adherence by construction
+    # rather than by parsing and hoping — is supported only by the gpt-oss and
+    # qwen families. Extraction is worthless without it.
     groq_api_key: str = ""
-    groq_extraction_model: str = "llama-3.3-70b-versatile"
-    groq_fast_model: str = "llama-3.1-8b-instant"
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    groq_extraction_model: str = "openai/gpt-oss-120b"
+    groq_fast_model: str = "openai/gpt-oss-20b"
+    groq_timeout_seconds: float = 90.0
+    groq_max_retries: int = 3
+    # Counted against the tokens-per-minute budget before generation starts, so
+    # this is a real cost knob rather than just a safety ceiling. The free tier
+    # allows 8000 TPM; a full extraction fits comfortably in 3000.
+    groq_max_output_tokens: int = 3000
+
+    # --- Observability ----------------------------------------------------
+    langsmith_tracing: bool = False
+    langsmith_api_key: str = ""
+    langsmith_project: str = "ai-job-tracker"
 
     # --- Embeddings (Phase 3) --------------------------------------------
     embedding_model: str = "BAAI/bge-small-en-v1.5"

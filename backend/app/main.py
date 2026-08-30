@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.agent.tracing import configure_tracing
 from app.api.v1 import health
 from app.api.v1.router import api_router
 from app.core.config import settings
@@ -24,7 +25,13 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     configure_logging()
-    logger.info("Starting AI Job Tracker API (env=%s)", settings.environment)
+    tracing = configure_tracing()
+    logger.info(
+        "Starting AI Job Tracker API (env=%s, model=%s, tracing=%s)",
+        settings.environment,
+        settings.groq_extraction_model,
+        "on" if tracing else "off",
+    )
     yield
     await engine.dispose()
     logger.info("Shutdown complete")

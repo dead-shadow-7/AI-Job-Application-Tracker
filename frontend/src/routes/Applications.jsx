@@ -82,12 +82,20 @@ export function Applications() {
               : ' '}
           </p>
         </div>
-        <Link
-          to="/applications/new"
-          className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition hover:bg-accent-hover"
-        >
-          Track a job
-        </Link>
+        <div className="flex items-center gap-2">
+          <Link
+            to="/applications/new"
+            className="rounded-lg border border-border-subtle px-3 py-2 text-sm font-medium transition hover:bg-surface-muted"
+          >
+            Add by hand
+          </Link>
+          <Link
+            to="/applications/paste"
+            className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition hover:bg-accent-hover"
+          >
+            Paste a job description
+          </Link>
+        </div>
       </div>
 
       <div className="space-y-3 rounded-xl border border-border-subtle bg-surface p-4">
@@ -176,7 +184,7 @@ export function Applications() {
 
       {items.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-border-subtle bg-surface">
-          <table className="w-full min-w-[52rem] text-sm">
+          <table className="w-full min-w-208 text-sm">
             <thead className="border-b border-border-subtle text-left text-xs text-ink-muted">
               <tr>
                 <th scope="col" className="px-4 py-2.5 font-medium">Role</th>

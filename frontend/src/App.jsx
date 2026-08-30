@@ -5,6 +5,7 @@ import { ApplicationDetail } from '@/routes/ApplicationDetail'
 import { Applications } from '@/routes/Applications'
 import { Login } from '@/routes/Login'
 import { NewApplication } from '@/routes/NewApplication'
+import { PasteJob } from '@/routes/PasteJob'
 
 export default function App() {
   return (
@@ -13,6 +14,7 @@ export default function App() {
       <Route element={<ProtectedRoute />}>
         <Route element={<AppShell />}>
           <Route path="/" element={<Applications />} />
+          <Route path="/applications/paste" element={<PasteJob />} />
           <Route path="/applications/new" element={<NewApplication />} />
           <Route path="/applications/:id" element={<ApplicationDetail />} />
         </Route>

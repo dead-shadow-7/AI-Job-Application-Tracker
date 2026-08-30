@@ -83,6 +83,10 @@ export const api = {
   updateStage: (id, stageId, body) =>
     apiFetch(`/api/v1/applications/${id}/stages/${stageId}`, { method: 'PATCH', body }),
 
+  // Extracts and returns a preview. Writes nothing — the user reviews the
+  // result and posts it to createApplication.
+  ingestJob: (body) => apiFetch('/api/v1/jobs/ingest', { method: 'POST', body }),
+
   listSkills: (params = {}) => apiFetch(`/api/v1/skills${query(params)}`),
   listCompanies: (params = {}) => apiFetch(`/api/v1/companies${query(params)}`),
   updateJob: (id, body) => apiFetch(`/api/v1/jobs/${id}`, { method: 'PATCH', body }),

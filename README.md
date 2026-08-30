@@ -5,8 +5,8 @@ description; an LLM extracts a structured record, scores it against your resume,
 and an event-sourced timeline lets an agent tell you *"Setoo has been silent 7
 days since the HR screening — a follow-up is due."*
 
-**Status: Phase 1 complete.** A working tracker with an event-sourced timeline —
-enough to replace the spreadsheet. AI ingestion lands in Phase 2.
+**Status: Phase 2 complete.** Paste a job description and get a structured,
+validated record back for review. Resume matching lands in Phase 3.
 
 ## Stack
 
@@ -120,11 +120,59 @@ frontend/
 | --- | --- | --- |
 | 0 | Foundations, auth, RLS, CI | done |
 | 1 | Tracker CRUD + event timeline — replaces the sheet | done |
-| 2 | LLM ingestion and full JD extraction | next |
-| 3 | Resume match and scoring | |
+| 2 | LLM ingestion and full JD extraction | done |
+| 3 | Resume match and scoring | next |
 | 4 | Agent — NL commands and follow-up detection | |
 | 5 | Semantic search, dedup, analytics | |
 | 6 | Vercel + EC2 deployment | |
+
+## Extraction refuses to guess
+
+`POST /api/v1/jobs/ingest` takes pasted text and returns a structured preview.
+It **writes nothing** — you review and correct, then save. Extraction is good,
+not perfect, and a wrong row saved silently costs far more to find later than an
+edit made now.
+
+Groq's strict `json_schema` mode makes the response schema-valid by
+construction. It says nothing about whether the contents are *true*, so
+[`validation.py`](backend/app/agent/validation.py) checks the extraction against
+its source and discards anything unsupported:
+
+- **Salary must appear verbatim in the posting**, or the whole block is dropped.
+  Models produce plausible salary bands readily, and a fabricated figure gets
+  compared against real offers and used to decide where to spend effort. The
+  model returns the quoted text alongside the parsed numbers precisely so this
+  can be checked.
+- **Skills not named in the posting are removed.** Models pattern-complete a
+  stack — a posting mentioning Django invites "Celery" and "Redis" whether or
+  not they appear — and those phantom skills would produce a fictitious gap when
+  scored against a resume in Phase 3.
+- Inverted ranges are swapped, implausible experience is cleared, and a company
+  name absent from the text is flagged for confirmation.
+
+Everything dropped or flagged is surfaced on the review screen rather than
+hidden, so you can supply what the posting actually said.
+
+### Units are the subtle part
+
+Given `45-60 LPA`, one model returned `45/60` and another `4500000/6000000`.
+Both are defensible readings of the same string. Storing either without
+provenance silently corrupts every salary comparison, which is why the schema
+carries the source text and the validator flags an annual figure under 10,000 as
+probably unconverted.
+
+### Model choice was forced by the API, not the docs
+
+Verified against Groq's live model list rather than its documentation: the Llama
+chat models are **retired** — only prompt-guard moderation variants remain — and
+strict `json_schema` is supported only by the gpt-oss and qwen families.
+Extraction is pinned to `openai/gpt-oss-120b`. A typical posting costs ~2,700
+tokens and about 2–4 seconds.
+
+The free tier allows 8,000 tokens per minute, and `max_completion_tokens` counts
+against that budget *before* generation, so it is capped at 3,000 rather than
+left optimistic. Groq reports token exhaustion as a `413`, which reads like
+"payload too large" and is not.
 
 ## The timeline is the point
 
