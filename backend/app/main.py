@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     configure_logging()
-    tracing = configure_tracing()
+    tracing = await configure_tracing()
     logger.info(
         "Starting AI Job Tracker API (env=%s, model=%s, tracing=%s)",
         settings.environment,

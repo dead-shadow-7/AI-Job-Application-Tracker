@@ -19,8 +19,18 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-def configure_tracing() -> bool:
-    """Returns whether tracing ended up enabled."""
+async def configure_tracing() -> bool:
+    """Wire up tracing, verifying the credential first. Returns whether it is on.
+
+    The credential is checked at startup because the SDK fails *per run*, not at
+    configuration time: a rejected key produces an identical warning on every
+    single extraction, buried among request logs, while the API still returns
+    200 and nothing looks wrong. One clear line at boot beats that.
+
+    Only an explicit 401/403 disables tracing. A timeout or connection error
+    leaves it enabled — LangSmith being briefly unreachable is not a reason to
+    silently stop tracing for the life of the process.
+    """
     if not settings.langsmith_tracing:
         os.environ["LANGSMITH_TRACING"] = "false"
         return False
@@ -30,11 +40,52 @@ def configure_tracing() -> bool:
         os.environ["LANGSMITH_TRACING"] = "false"
         return False
 
+    verdict = await _check_credential(settings.langsmith_api_key)
+    if verdict is False:
+        # The usual cause is key *type*, not a bad paste. LangSmith issues two
+        # kinds: personal access tokens (lsv2_pt_), scoped to a user, and
+        # service keys (lsv2_sk_), scoped to a workspace. Run ingestion writes
+        # into a workspace project, so a personal token is refused with a bare
+        # 403 that says nothing about why.
+        hint = (
+            "That key is a personal access token (lsv2_pt_). Run ingestion "
+            "needs a workspace-scoped Service Key (lsv2_sk_) — create one at "
+            "smith.langchain.com > Settings > API keys > Service Keys."
+            if settings.langsmith_api_key.startswith("lsv2_pt_")
+            else f"Check the key belongs to the workspace holding project "
+            f"{settings.langsmith_project!r}."
+        )
+        logger.error("LangSmith rejected the API key, so tracing is disabled. %s", hint)
+        os.environ["LANGSMITH_TRACING"] = "false"
+        return False
+
     os.environ["LANGSMITH_TRACING"] = "true"
     os.environ["LANGSMITH_API_KEY"] = settings.langsmith_api_key
     os.environ["LANGSMITH_PROJECT"] = settings.langsmith_project
-    logger.info("LangSmith tracing enabled (project=%s)", settings.langsmith_project)
+    logger.info(
+        "LangSmith tracing enabled (project=%s, key %s)",
+        settings.langsmith_project,
+        "verified" if verdict else "unverified — LangSmith unreachable",
+    )
     return True
+
+
+async def _check_credential(api_key: str) -> bool | None:
+    """True if accepted, False if rejected, None if it could not be determined."""
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                "https://api.smith.langchain.com/sessions",
+                headers={"x-api-key": api_key},
+                params={"limit": 1},
+            )
+    except httpx.RequestError as exc:
+        logger.warning("Could not reach LangSmith to verify the key: %s", exc)
+        return None
+
+    return response.status_code not in (401, 403)
 
 
 def run_metadata(
