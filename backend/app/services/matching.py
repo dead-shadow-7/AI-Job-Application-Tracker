@@ -25,7 +25,7 @@ from app.domain.enums import SENIORITY_RANK, Seniority
 from app.models.job import Job, JobSkill
 from app.models.resume import Resume, ResumeChunk
 from app.models.skill import Skill
-from app.services.embeddings import embedding_provider
+from app.services import embeddings
 from app.services.skills import extract_skills_from_text
 
 logger = logging.getLogger(__name__)
@@ -143,7 +143,7 @@ async def retrieve_evidence(
     HNSW index is used; pulling chunks into Python to compare them would make
     the index pointless.
     """
-    vector = await embedding_provider.embed_query(query)
+    vector = await embeddings.embedding_provider.embed_query(query)
     return list(
         (
             await session.execute(

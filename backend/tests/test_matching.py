@@ -188,3 +188,67 @@ def test_years_of_experience_is_read_only_when_stated(text: str, expected: float
     """Never inferred from employment dates: overlapping roles, internships and
     gaps make that unreliable, and a wrong number skews every score invisibly."""
     assert guess_years_experience(text) == expected
+
+
+# --- Job embedding ---------------------------------------------------------
+
+
+async def test_creating_a_job_embeds_it(client, embeddings) -> None:
+    """Without this, semantic search and near-duplicate detection are inert:
+    the table and index exist but nothing ever populates them."""
+    from sqlalchemy import text as sql
+
+    from app.db.session import open_user_session
+    from tests.factories import Session as UserSession
+
+    user = await UserSession(client).start()
+    before = embeddings.documents_embedded
+
+    await user.create_application(company_name="Razorpay", title="Backend Engineer")
+
+    assert embeddings.documents_embedded > before
+    async for session in open_user_session(user.user_id):
+        count = (await session.execute(sql("SELECT count(*) FROM job_embeddings"))).scalar_one()
+    assert count == 1
+
+
+async def test_embedding_text_omits_boilerplate() -> None:
+    """Postings pad themselves with culture and benefits prose that is nearly
+    identical across companies. Including it drags every job toward the same
+    point in the space, which is precisely what makes semantic search useless."""
+    from app.services.applications import job_embedding_text
+
+    class FakeJob:
+        title = "Backend Engineer"
+        seniority = "senior"
+        location = "Pune"
+        responsibilities = "Build services."
+
+    content = job_embedding_text(FakeJob(), "Razorpay", ["5+ years Python", "Kafka"])
+
+    assert "Backend Engineer" in content
+    assert "Razorpay" in content
+    assert "5+ years Python" in content
+    assert "Kafka" in content
+
+
+async def test_a_job_that_fails_to_embed_is_still_saved(client, monkeypatch) -> None:
+    """An un-embedded job is merely absent from semantic search. Refusing to
+    save it would lose the user's actual work over a secondary feature."""
+
+    class BrokenEmbeddings:
+        dimension = 384
+
+        async def embed_documents(self, texts):
+            raise RuntimeError("model unavailable")
+
+        async def embed_query(self, text_):
+            raise RuntimeError("model unavailable")
+
+    monkeypatch.setattr("app.services.embeddings.embedding_provider", BrokenEmbeddings())
+    from tests.factories import Session as UserSession
+
+    user = await UserSession(client).start()
+    application = await user.create_application(company_name="Zerodha")
+
+    assert application["job"]["company"]["name"] == "Zerodha"

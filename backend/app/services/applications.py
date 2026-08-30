@@ -1,6 +1,7 @@
 """Application creation and querying."""
 
 import hashlib
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -13,10 +14,14 @@ from app.domain.enums import TERMINAL_STATUSES, ApplicationStatus, EventSource, 
 from app.models.application import Application
 from app.models.company import Company
 from app.models.job import Job, JobRequirement, JobSkill
+from app.models.resume import JobEmbedding
 from app.models.skill import Skill
 from app.schemas.job import JobCreate
+from app.services import embeddings
 from app.services.companies import resolve_company
 from app.services.events import append_event, reload_application
+
+logger = logging.getLogger(__name__)
 
 
 def content_hash(text: str | None) -> str | None:
@@ -86,8 +91,67 @@ async def create_job(session: AsyncSession, payload: JobCreate, user_id: uuid.UU
             session.add(JobSkill(job_id=job.id, skill_id=skill.id, is_required=True))
 
     await session.flush()
+    await embed_job(session, job)
     await session.refresh(job)
     return job
+
+
+def job_embedding_text(job: Job, company_name: str, requirements: list[str]) -> str:
+    """The text a job is represented by for semantic search.
+
+    Title, company, and requirements rather than the full description: postings
+    are padded with boilerplate about culture and benefits that is near-identical
+    across companies, and including it pulls every job toward the same point in
+    the space — which is exactly what makes semantic search useless.
+    """
+    parts = [job.title, company_name]
+    if job.seniority:
+        parts.append(job.seniority)
+    if job.location:
+        parts.append(job.location)
+    parts.extend(requirements)
+    if job.responsibilities:
+        parts.append(job.responsibilities[:1500])
+    return " • ".join(p for p in parts if p)
+
+
+async def embed_job(session: AsyncSession, job: Job) -> None:
+    """Embed a job for semantic search and near-duplicate detection.
+
+    Failure is logged, not raised. An un-embedded job is merely absent from
+    semantic search; refusing to save it because the embedder hiccupped would
+    lose the user's actual work over a secondary feature.
+    """
+    company = (
+        await session.execute(select(Company.name).where(Company.id == job.company_id))
+    ).scalar_one_or_none()
+
+    requirements = list(
+        (await session.execute(select(JobRequirement.text).where(JobRequirement.job_id == job.id)))
+        .scalars()
+        .all()
+    )
+
+    content = job_embedding_text(job, company or "", requirements)
+
+    try:
+        vectors = await embeddings.embedding_provider.embed_documents([content])
+    except Exception:
+        logger.exception("Could not embed job %s; it will be missing from semantic search", job.id)
+        return
+
+    existing = (
+        await session.execute(
+            select(JobEmbedding).where(JobEmbedding.job_id == job.id, JobEmbedding.ordinal == 0)
+        )
+    ).scalar_one_or_none()
+
+    if existing is not None:
+        existing.content = content
+        existing.embedding = vectors[0]
+    else:
+        session.add(JobEmbedding(job_id=job.id, ordinal=0, content=content, embedding=vectors[0]))
+    await session.flush()
 
 
 async def create_application(

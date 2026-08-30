@@ -35,6 +35,7 @@ os.environ["SUPABASE_JWT_AUDIENCE"] = "authenticated"
 os.environ["ENVIRONMENT"] = "ci"
 
 import asyncio  # noqa: E402
+import hashlib  # noqa: E402
 import uuid  # noqa: E402
 from collections.abc import AsyncIterator  # noqa: E402
 from datetime import UTC, datetime, timedelta  # noqa: E402
@@ -154,3 +155,47 @@ def make_token(
 
 def auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
+
+
+class StubEmbeddings:
+    """Deterministic pseudo-embeddings, used by every test.
+
+    Autouse below, because job creation now embeds too — so without a global
+    stub any test that creates an application would download a ~130 MB model
+    and run CPU inference. Vectors are derived from a hash of the text, so
+    identical input yields an identical vector, which is the only property the
+    code under test relies on. They carry no semantic meaning, which is fine:
+    nothing here asserts on retrieval quality.
+
+    Tests that genuinely need real embeddings can override this fixture.
+    """
+
+    def __init__(self) -> None:
+        from app.core.config import settings as _settings
+
+        self.dimension = _settings.embedding_dim
+        self.documents_embedded = 0
+        self.queries_embedded = 0
+
+    def _vector(self, value: str) -> list[float]:
+        digest = hashlib.sha256(value.encode()).digest()
+        raw = [(digest[i % len(digest)] / 255.0) - 0.5 for i in range(self.dimension)]
+        norm = sum(x * x for x in raw) ** 0.5 or 1.0
+        return [x / norm for x in raw]
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.documents_embedded += len(texts)
+        return [self._vector(t) for t in texts]
+
+    async def embed_query(self, text_: str) -> list[float]:
+        self.queries_embedded += 1
+        return self._vector(text_)
+
+
+@pytest.fixture(autouse=True)
+def embeddings(monkeypatch: pytest.MonkeyPatch) -> StubEmbeddings:
+    """Patched on the module, so every consumer resolving
+    ``embeddings.embedding_provider`` at call time picks up the stub."""
+    stub = StubEmbeddings()
+    monkeypatch.setattr("app.services.embeddings.embedding_provider", stub)
+    return stub

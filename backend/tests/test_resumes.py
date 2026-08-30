@@ -8,15 +8,13 @@ chunking, defaults, and above all that one user's resume is invisible to
 another.
 """
 
-import hashlib
 from typing import Any
 
-import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 
-from app.core.config import settings
 from app.db.session import SessionFactory, open_user_session
+from tests.conftest import StubEmbeddings
 from tests.factories import Session
 
 RESUME_TEXT = """\
@@ -38,44 +36,6 @@ Python, FastAPI, PostgreSQL, Kafka, Docker, Kubernetes, AWS, LangChain
 EDUCATION
 B.Tech in Computer Science, Pune Institute of Computer Technology
 """
-
-
-class StubEmbeddings:
-    """Deterministic pseudo-embeddings.
-
-    Derived from a hash of the text so identical input yields an identical
-    vector — the property the code under test actually relies on. Not
-    semantically meaningful, which is fine: nothing here asserts on retrieval
-    quality, only on plumbing.
-    """
-
-    dimension = settings.embedding_dim
-
-    def __init__(self) -> None:
-        self.documents_embedded = 0
-        self.queries_embedded = 0
-
-    def _vector(self, value: str) -> list[float]:
-        digest = hashlib.sha256(value.encode()).digest()
-        raw = [(digest[i % len(digest)] / 255.0) - 0.5 for i in range(self.dimension)]
-        norm = sum(x * x for x in raw) ** 0.5 or 1.0
-        return [x / norm for x in raw]
-
-    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        self.documents_embedded += len(texts)
-        return [self._vector(t) for t in texts]
-
-    async def embed_query(self, text_: str) -> list[float]:
-        self.queries_embedded += 1
-        return self._vector(text_)
-
-
-@pytest.fixture
-def embeddings(monkeypatch: pytest.MonkeyPatch) -> StubEmbeddings:
-    stub = StubEmbeddings()
-    monkeypatch.setattr("app.services.resumes.embedding_provider", stub)
-    monkeypatch.setattr("app.services.matching.embedding_provider", stub)
-    return stub
 
 
 async def upload_text(user: Session, label: str = "Main", body: str = RESUME_TEXT) -> Any:

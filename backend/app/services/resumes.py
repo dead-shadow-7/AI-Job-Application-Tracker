@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import NotFoundError
 from app.models.resume import Resume, ResumeChunk
-from app.services.embeddings import embedding_provider
+from app.services import embeddings
 from app.services.resume_parser import chunk_resume, guess_years_experience
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,7 @@ async def _embed_chunks(session: AsyncSession, resume: Resume) -> int:
         logger.warning("Resume %s produced no chunks", resume.id)
         return 0
 
-    vectors = await embedding_provider.embed_documents([c.content for c in chunks])
+    vectors = await embeddings.embedding_provider.embed_documents([c.content for c in chunks])
 
     for chunk, vector in zip(chunks, vectors, strict=True):
         session.add(
