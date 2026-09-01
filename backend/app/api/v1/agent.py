@@ -13,26 +13,22 @@ import logging
 
 from fastapi import APIRouter, status
 
+from app.agent.assistant import run_assistant
 from app.agent.llm_client import LLMError, llm_client
-from app.agent.prompts.assistant import ASSISTANT_SYSTEM_PROMPT, build_assistant_prompt
+from app.agent.prompts.assistant import ASSISTANT_PROMPT_VERSION
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import settings
 from app.core.exceptions import InvalidOperationError
 from app.domain.enums import EventSource
-from app.models.application import Application
 from app.schemas.agent import (
-    ASSISTANT_PROMPT_VERSION,
     ActionPreview,
-    AgentReply,
     ChatRequest,
     ChatResponse,
     ConfirmRequest,
 )
 from app.schemas.application import ApplicationRead
-from app.services.applications import list_applications
 from app.services.events import append_event, get_application, reload_application
-from app.services.followups import ensure_default_rules, find_stale_applications
-from app.services.resolver import resolve_application
+from app.services.followups import ensure_default_rules
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +38,16 @@ router = APIRouter(prefix="/agent", tags=["agent"])
 # job search is tens of applications, so it fits, and one call beats three
 # round trips on a tight token budget. Bounded so a heavy user cannot silently
 # blow the context window.
-MAX_APPLICATIONS_IN_CONTEXT = 60
 
 
 @router.post("/chat", response_model=ChatResponse, summary="Ask the assistant")
 async def chat(payload: ChatRequest, user: CurrentUser, session: DbSession) -> ChatResponse:
-    """Answer, or propose an action. Never writes."""
+    """Answer, using tools as needed. Never writes.
+
+    Every tool the loop can reach is read-only; `propose_event` records an
+    intention and returns it here for confirmation. So a misread instruction
+    produces a dialog the user rejects, not a changed row.
+    """
     if not llm_client.is_configured:
         raise InvalidOperationError(
             "No LLM is configured, so the assistant is unavailable. "
@@ -56,58 +56,20 @@ async def chat(payload: ChatRequest, user: CurrentUser, session: DbSession) -> C
 
     await ensure_default_rules(session, user.id)
 
-    rows, _ = await list_applications(session, user_id=user.id, limit=MAX_APPLICATIONS_IN_CONTEXT)
-    stale = await find_stale_applications(session, user.id)
-
     try:
-        result = await llm_client.extract(
-            schema=AgentReply,
-            system=ASSISTANT_SYSTEM_PROMPT,
-            user=build_assistant_prompt(
-                message=payload.message,
-                applications=[_describe(a) for a in rows],
-                stale=[item.reason for item in stale],
-            ),
-        )
+        result = await run_assistant(session, user.id, payload.message)
     except LLMError as exc:
         raise InvalidOperationError(str(exc)) from exc
 
-    reply = result.data
     response = ChatResponse(
-        message=reply.message,
+        message=result.message,
         model=settings.extraction_model,
         prompt_version=ASSISTANT_PROMPT_VERSION,
     )
 
-    if reply.action.kind != "append_event" or not reply.action.event_type:
-        return response
+    if result.proposal:
+        response.pending_action = ActionPreview(**result.proposal)
 
-    if not reply.action.application_query:
-        response.message += " Which application do you mean?"
-        return response
-
-    # The model proposed a target by name; the tracker decides which row that
-    # is. The model never sees or supplies an id, so it cannot aim at a row it
-    # was not shown.
-    resolution = await resolve_application(session, user.id, reply.action.application_query)
-
-    if resolution.best is None:
-        # Ambiguous or unmatched. Surfacing the options is the correct outcome:
-        # guessing here is the failure mode this whole design exists to avoid.
-        response.disambiguation = [c.label for c in resolution.candidates]
-        response.message = resolution.describe()
-        return response
-
-    candidate = resolution.best
-    response.pending_action = ActionPreview(
-        kind="append_event",
-        event_type=reply.action.event_type,
-        note=reply.action.note,
-        application_id=candidate.application.id,
-        application_label=candidate.label,
-        confidence=candidate.score,
-        matched_on=candidate.matched_on,
-    )
     return response
 
 
@@ -141,11 +103,3 @@ async def confirm(
     return ApplicationRead.model_validate(
         await reload_application(session, application.id, user.id)
     )
-
-
-def _describe(application: Application) -> str:
-    job = application.job
-    parts = [f"{job.title} at {job.company.name}", f"status {application.current_status}"]
-    if application.match_score is not None:
-        parts.append(f"match {application.match_score}/100")
-    return " | ".join(parts)

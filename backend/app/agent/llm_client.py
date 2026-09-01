@@ -111,6 +111,40 @@ class LLMClient:
                 f"{target_model} returned JSON that does not match {schema.__name__}."
             ) from exc
 
+    async def chat(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        model: str | None = None,
+        temperature: float = 0.0,
+        max_tokens: int | None = None,
+    ) -> tuple[dict[str, Any], LLMUsage]:
+        """One turn of a tool-calling conversation.
+
+        Returns the raw assistant message so the caller can drive the loop:
+        either it carries ``tool_calls`` to execute, or it carries ``content``
+        and the loop is done. Deliberately not wrapped in a framework — the
+        loop is a dozen lines and keeping it visible means the stopping
+        condition and the tool-result plumbing are inspectable rather than
+        inherited.
+        """
+        if not self.is_configured:
+            raise LLMError("No LLM API key is configured.")
+
+        payload: dict[str, Any] = {
+            "model": model or settings.extraction_model,
+            "temperature": temperature,
+            "max_completion_tokens": max_tokens or settings.llm_max_output_tokens,
+            "messages": messages,
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+
+        body, usage = await self._post(payload, payload["model"])
+        return body["choices"][0]["message"], usage
+
     async def _post(self, payload: dict[str, Any], model: str) -> tuple[dict[str, Any], LLMUsage]:
         last_error: Exception | None = None
 

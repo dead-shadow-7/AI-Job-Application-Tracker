@@ -154,6 +154,11 @@ class StageOutcome(StrEnum):
     CANCELLED = "cancelled"
 
 
+class MessageRole(StrEnum):
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
 class FollowUpAction(StrEnum):
     """What a fired rule does.
 

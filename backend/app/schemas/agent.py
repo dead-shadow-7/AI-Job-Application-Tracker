@@ -12,8 +12,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.domain.enums import EventType
 
-ASSISTANT_PROMPT_VERSION = "2026-09-01.1"
-
 
 class ProposedAction(BaseModel):
     """A change the assistant wants to make, pending confirmation."""
