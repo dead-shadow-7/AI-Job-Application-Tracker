@@ -14,7 +14,7 @@ from typing import Any, TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
-from app.agent.tracing import hide, traced
+from app.agent.tracing import as_llm_run, hide, record_model, traced
 from app.core.config import settings
 from app.core.exceptions import DomainError
 from app.schemas.extraction import to_strict_json_schema
@@ -62,6 +62,30 @@ class StructuredResult[TModel: BaseModel](BaseModel):
     usage: LLMUsage
 
 
+def _chat_run(outputs: Any) -> dict[str, Any]:
+    """Reshape `(message, usage)` into what LangSmith prices a run from.
+
+    Non-dict returns arrive wrapped under "output", so the tuple is unpacked
+    from there. Written defensively: a trace that fails to render is annoying,
+    a request that fails because tracing raised is not acceptable.
+    """
+    value = outputs.get("output") if isinstance(outputs, dict) else outputs
+    if not (isinstance(value, tuple) and len(value) == 2):
+        return outputs if isinstance(outputs, dict) else {"output": outputs}
+
+    message, usage = value
+    return as_llm_run([message], usage)
+
+
+def _extract_run(outputs: Any) -> dict[str, Any]:
+    """The same, for the structured-extraction call."""
+    value = outputs.get("output") if isinstance(outputs, dict) else outputs
+    if not isinstance(value, StructuredResult):
+        return outputs if isinstance(outputs, dict) else {"output": outputs}
+
+    return as_llm_run([{"role": "assistant", "content": value.data.model_dump_json()}], value.usage)
+
+
 class LLMClient:
     def __init__(self, api_key: str | None = None, base_url: str | None = None) -> None:
         self._api_key = api_key if api_key is not None else settings.llm_api_key
@@ -71,6 +95,12 @@ class LLMClient:
     def is_configured(self) -> bool:
         return bool(self._api_key)
 
+    @traced(
+        "extract",
+        run_type="llm",
+        process_inputs=hide("self", "schema"),
+        process_outputs=_extract_run,
+    )
     async def extract(
         self,
         *,
@@ -114,6 +144,7 @@ class LLMClient:
         }
 
         body, usage = await self._post(payload, target_model)
+        record_model(usage.model, settings.llm_provider)
         content = body["choices"][0]["message"]["content"]
 
         try:
@@ -124,7 +155,12 @@ class LLMClient:
                 f"{target_model} returned JSON that does not match {schema.__name__}."
             ) from exc
 
-    @traced("chat", run_type="llm", process_inputs=hide("self", "tools"))
+    @traced(
+        "chat",
+        run_type="llm",
+        process_inputs=hide("self", "tools"),
+        process_outputs=_chat_run,
+    )
     async def chat(
         self,
         *,
@@ -157,6 +193,7 @@ class LLMClient:
             payload["tool_choice"] = "auto"
 
         body, usage = await self._post(payload, payload["model"])
+        record_model(usage.model, settings.llm_provider)
         return body["choices"][0]["message"], usage
 
     async def _post(self, payload: dict[str, Any], model: str) -> tuple[dict[str, Any], LLMUsage]:

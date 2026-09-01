@@ -76,21 +76,33 @@ async def configure_tracing() -> bool:
 
 
 async def _check_credential(api_key: str, endpoint: str) -> bool | None:
-    """True if accepted, False if rejected, None if it could not be determined."""
-    import httpx
+    """True if accepted, False if rejected, None if it could not be determined.
+
+    Goes through the SDK's ``runs.query`` rather than a hand-rolled
+    ``GET /sessions``. That was the legacy query API, which LangSmith is
+    removing on 31 January 2027 and already warns about in the console — and
+    since this ran on every boot, it was the only thing keeping the warning lit.
+    Using the SDK means their migration is inherited rather than re-discovered.
+
+    Only 401 and 403 count as rejection. The query is deliberately incomplete —
+    it names no project — so a *valid* key answers 400: authentication is
+    checked before parameters, which makes "not 403" the signal. Anything else,
+    including an unreachable LangSmith, leaves tracing on; a brief outage is no
+    reason to stop tracing for the life of the process.
+    """
+    from langsmith import Client
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            response = await client.get(
-                f"{endpoint.rstrip('/')}/sessions",
-                headers={"x-api-key": api_key},
-                params={"limit": 1},
-            )
-    except httpx.RequestError as exc:
-        logger.warning("Could not reach LangSmith to verify the key: %s", exc)
-        return None
-
-    return response.status_code not in (401, 403)
+        async for _ in Client(api_key=api_key, api_url=endpoint).runs.query(page_size=1):
+            break
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        if status in (401, 403):
+            return False
+        if status is None:
+            logger.warning("Could not reach LangSmith to verify the key: %s", exc)
+            return None
+    return True
 
 
 def hide(*names: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
@@ -109,6 +121,44 @@ def hide(*names: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
     return process
 
 
+def record_model(model: str, provider: str) -> None:
+    """Tag the current LLM run with what answered it.
+
+    LangSmith prices a run from ``ls_model_name`` and ``ls_provider`` in its
+    metadata. A LangChain chat model sets these itself, which is why token
+    counts and cost appear for free there and were blank here — the client is
+    hand-written, so nothing was filling them in. Set at call time rather than
+    on the decorator because the model is configuration, not a constant.
+    """
+    try:
+        from langsmith.run_helpers import get_current_run_tree
+    except ImportError:  # pragma: no cover - langsmith is a hard dependency
+        return
+
+    run = get_current_run_tree()
+    if run is not None:
+        run.metadata.update({"ls_provider": provider, "ls_model_name": model})
+
+
+def as_llm_run(messages: list[Any], usage: Any) -> dict[str, Any]:
+    """The output shape LangSmith reads token counts out of.
+
+    ``usage_metadata`` is the documented contract; anything else is stored as
+    an opaque blob and the run shows no tokens and no cost. ``cache_read`` is
+    included because it is most of the prompt here — without it the cost shown
+    would be the undiscounted one, which is roughly double what is billed.
+    """
+    return {
+        "messages": messages,
+        "usage_metadata": {
+            "input_tokens": usage.prompt_tokens,
+            "output_tokens": usage.completion_tokens,
+            "total_tokens": usage.total_tokens,
+            "input_token_details": {"cache_read": usage.cached_tokens},
+        },
+    }
+
+
 RunType = Literal["tool", "chain", "llm", "retriever", "embedding", "prompt", "parser"]
 
 
@@ -117,6 +167,7 @@ def traced(
     run_type: RunType = "chain",
     *,
     process_inputs: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    process_outputs: Callable[..., dict[str, Any]] | None = None,
 ) -> Callable[[F], F]:
     """Mark a function as a step in a LangSmith trace.
 
@@ -133,7 +184,12 @@ def traced(
             from langsmith import traceable
         except ImportError:  # pragma: no cover - langsmith is a hard dependency
             return func
-        decorated = traceable(run_type, name=name, process_inputs=process_inputs)(func)
+        decorated = traceable(
+            run_type,
+            name=name,
+            process_inputs=process_inputs,
+            process_outputs=process_outputs,
+        )(func)
         return cast(F, decorated)
 
     return decorate
