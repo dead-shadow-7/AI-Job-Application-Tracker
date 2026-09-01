@@ -27,6 +27,15 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://jobtracker:jobtracker@localhost:5432/jobtracker"
     )
     db_echo: bool = False
+    # Sized to the server, not to demand. Supabase's session pooler allows this
+    # role 15 clients (verified: connection 16 fails with EMAXCONNSESSION, a
+    # hard 500 rather than a wait — SQLAlchemy only queues when its *own* pool
+    # is full, so an oversized pool never blocks, it just gets refused).
+    # 14 leaves one spare for migrations. Raise the dashboard's Pool Size first
+    # if these ever need to go up.
+    db_pool_size: int = 10
+    db_max_overflow: int = 4
+    db_pool_timeout: float = 30.0
 
     # --- Supabase Auth ----------------------------------------------------
     supabase_url: str = ""
@@ -61,8 +70,11 @@ class Settings(BaseSettings):
     #
     # Free tier: 8,000 tokens/minute AND 200,000 tokens/day. The daily cap is
     # the one that bites — backing off does not help, you are simply done until
-    # tomorrow. Tool schemas cost ~2,400 tokens per round, so roughly 40 agent
-    # messages exhaust a day.
+    # tomorrow. Measured against Groq's own billed prompt_tokens, the fixed
+    # prefix (22 tool schemas + system prompt) is ~3,320 per round, so a
+    # two-round turn runs ~7,200-8,500 and roughly 20-25 agent messages exhaust
+    # a day. Note the per-minute limiter debits prompt + max_completion_tokens
+    # together, which is why llm_chat_output_tokens is a real cost knob.
     groq_api_key: str = ""
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_extraction_model: str = "openai/gpt-oss-120b"
@@ -180,6 +192,19 @@ class Settings(BaseSettings):
     # this is a real cost knob rather than just a safety ceiling. Groq's free
     # tier allows 8000 TPM; a full extraction fits comfortably in 3000.
     llm_max_output_tokens: int = 3000
+    # Separate ceiling for the assistant loop. The reply is one or two sentences
+    # or a tool call — measured at 23 completion tokens per turn — so reserving
+    # the extraction ceiling there spent 37% of Groq's 8000 TPM budget on output
+    # that never arrived, on every one of up to six rounds.
+    llm_chat_output_tokens: int = 1024
+
+    # Whole-request deadlines. Without one the nesting multiplies: the ingestion
+    # graph retries extraction twice, each _post retries three times at a 90s
+    # timeout, so a single request could hold its RLS transaction — and one of
+    # db_pool_size connections — for roughly nine minutes. The user has long
+    # since given up by then; the connection had not.
+    assistant_deadline_seconds: float = 120.0
+    ingest_deadline_seconds: float = 100.0
 
     # --- Observability ----------------------------------------------------
     # The endpoint is regional and is not optional. A key issued in one region

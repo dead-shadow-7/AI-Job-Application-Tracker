@@ -16,6 +16,7 @@ resulting events so an agent-made change is visible on the timeline and
 reversible by appending a correction.
 """
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
@@ -76,7 +77,12 @@ async def chat(payload: ChatRequest, user: CurrentUser, session: DbSession) -> C
     await ensure_default_rules(session, user.id)
 
     try:
-        result = await run_assistant(session, user.id, payload.message)
+        async with asyncio.timeout(settings.assistant_deadline_seconds):
+            result = await run_assistant(session, user.id, payload.message)
+    except TimeoutError as exc:
+        raise InvalidOperationError(
+            "The assistant took too long to answer. Try asking for one thing at a time."
+        ) from exc
     except LLMError as exc:
         raise InvalidOperationError(str(exc)) from exc
 

@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.agent.llm_client import close_http_client
 from app.agent.tracing import configure_tracing
 from app.api.v1 import health
 from app.api.v1.router import api_router
@@ -33,6 +34,7 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         "on" if tracing else "off",
     )
     yield
+    await close_http_client()
     await engine.dispose()
     logger.info("Shutdown complete")
 

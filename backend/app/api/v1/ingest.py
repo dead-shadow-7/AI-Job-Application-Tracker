@@ -7,6 +7,7 @@ discover later than an edit made now — especially for salary, which is the
 field most likely to be wrong and least likely to be re-checked.
 """
 
+import asyncio
 import logging
 from decimal import Decimal
 from uuid import UUID
@@ -48,13 +49,19 @@ async def ingest(payload: IngestRequest, user: CurrentUser, session: DbSession) 
             "Add a job by hand, or set the key and restart the API."
         )
 
-    state = await run_ingestion(
-        session=session,
-        raw_text=payload.raw_text,
-        url=payload.url,
-        source_platform=payload.source_platform,
-        user_id=str(user.id),
-    )
+    try:
+        async with asyncio.timeout(settings.ingest_deadline_seconds):
+            state = await run_ingestion(
+                session=session,
+                raw_text=payload.raw_text,
+                url=payload.url,
+                source_platform=payload.source_platform,
+                user_id=str(user.id),
+            )
+    except TimeoutError as exc:
+        raise InvalidOperationError(
+            "Extraction took too long. Paste the posting again, or add the job by hand."
+        ) from exc
 
     extracted: ExtractedJob | None = state.get("extracted")
     if state.get("error") or extracted is None:
