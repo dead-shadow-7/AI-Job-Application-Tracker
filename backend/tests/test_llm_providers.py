@@ -89,6 +89,20 @@ def test_the_ai_credits_key_is_read_under_either_spelling() -> None:
     assert joined.llm_api_key == "from-joined"
 
 
+def test_the_suite_does_not_write_traces() -> None:
+    """Tests used to emit into the real LangSmith project — the run list filled
+    with rows whose input was `<test_ingest.StubLLM object at 0x...>`, spending
+    retention on runs nobody would read and burying real traffic among them.
+
+    Guarding the environment variable rather than the behaviour because that is
+    where the mistake would be: the SDK reads it directly, at import.
+    """
+    import os
+
+    assert os.environ.get("LANGSMITH_TRACING") == "false"
+    assert not os.environ.get("LANGSMITH_API_KEY")
+
+
 def test_models_are_overridable_per_provider() -> None:
     """Pinning an exact model id matters more on a gateway than on a first-party
     API: the catalogue changes without notice and the ids are not stable."""

@@ -33,6 +33,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import analysis, proposals
 from app.agent.resolving import resolve_application_only
+from app.agent.tracing import hide, traced
 from app.domain.enums import (
     EmploymentType,
     EventType,
@@ -378,6 +379,7 @@ class ToolResult:
 Handler = Callable[[AsyncSession, uuid.UUID, dict[str, Any]], Awaitable[str | ToolResult]]
 
 
+@traced("tool", run_type="tool", process_inputs=hide("session", "message"))
 async def run_tool(
     name: str,
     arguments: dict[str, Any],

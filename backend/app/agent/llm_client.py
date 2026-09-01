@@ -14,6 +14,7 @@ from typing import Any, TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from app.agent.tracing import hide, traced
 from app.core.config import settings
 from app.core.exceptions import DomainError
 from app.schemas.extraction import to_strict_json_schema
@@ -123,6 +124,7 @@ class LLMClient:
                 f"{target_model} returned JSON that does not match {schema.__name__}."
             ) from exc
 
+    @traced("chat", run_type="llm", process_inputs=hide("self", "tools"))
     async def chat(
         self,
         *,

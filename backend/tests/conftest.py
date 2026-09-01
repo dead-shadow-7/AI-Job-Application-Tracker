@@ -49,6 +49,16 @@ os.environ["SUPABASE_JWT_SECRET"] = TEST_JWT_SECRET
 os.environ["SUPABASE_JWT_AUDIENCE"] = "authenticated"
 os.environ["ENVIRONMENT"] = "ci"
 
+# The suite must not write to LangSmith. It was: every ingestion test emitted a
+# trace into the real project, so the run list filled with rows whose input was
+# `<test_ingest.StubLLM object at 0x...>` — noise indistinguishable from real
+# traffic, burning retention on runs nobody will ever read. Set on the process
+# rather than through Settings because the SDK reads the environment directly
+# and starts tracing on first import, before any application code runs.
+os.environ["LANGSMITH_TRACING"] = "false"
+os.environ["LANGCHAIN_TRACING_V2"] = "false"  # the older name, still honoured
+os.environ.pop("LANGSMITH_API_KEY", None)
+
 import asyncio  # noqa: E402
 import hashlib  # noqa: E402
 import json  # noqa: E402

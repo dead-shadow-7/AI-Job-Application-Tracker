@@ -13,10 +13,14 @@ through, and neither of which is visible from the API response alone.
 
 import logging
 import os
+from collections.abc import Callable
+from typing import Any, Literal, TypeVar, cast
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+F = TypeVar("F", bound=Callable[..., Any])
 
 
 async def configure_tracing() -> bool:
@@ -87,6 +91,52 @@ async def _check_credential(api_key: str, endpoint: str) -> bool | None:
         return None
 
     return response.status_code not in (401, 403)
+
+
+def hide(*names: str) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Drop arguments that would make a trace useless or enormous.
+
+    ``self`` and ``session`` serialise as ``<sqlalchemy.ext.asyncio.AsyncSession
+    object at 0x...>``, which is what the ingestion runs already show in the
+    input column — a repr nobody can read, in the field you scan to find the run
+    you want. ``tools`` is worse: the schema block is ~3,300 tokens of JSON,
+    identical on every round, uploaded each time.
+    """
+
+    def process(inputs: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in inputs.items() if k not in names}
+
+    return process
+
+
+RunType = Literal["tool", "chain", "llm", "retriever", "embedding", "prompt", "parser"]
+
+
+def traced(
+    name: str,
+    run_type: RunType = "chain",
+    *,
+    process_inputs: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+) -> Callable[[F], F]:
+    """Mark a function as a step in a LangSmith trace.
+
+    The ingestion pipeline traces itself because LangGraph does it; the
+    assistant is a hand-written loop over httpx and so was completely invisible
+    — the run list showed job_ingestion and nothing else, while the part with
+    twenty-two tools and a confirmation flow left no record at all.
+
+    A no-op when tracing is off, which includes the whole test suite.
+    """
+
+    def decorate(func: F) -> F:
+        try:
+            from langsmith import traceable
+        except ImportError:  # pragma: no cover - langsmith is a hard dependency
+            return func
+        decorated = traceable(run_type, name=name, process_inputs=process_inputs)(func)
+        return cast(F, decorated)
+
+    return decorate
 
 
 def run_metadata(

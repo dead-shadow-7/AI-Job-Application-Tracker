@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agent.llm_client import LLMClient, llm_client
 from app.agent.prompts.assistant import ASSISTANT_SYSTEM_PROMPT
 from app.agent.tools import TOOL_SCHEMAS, run_tool
+from app.agent.tracing import hide, traced
 from app.domain.enums import MessageRole
 from app.models.conversation import AgentMessage
 
@@ -97,6 +98,7 @@ async def save_turn(
     await session.flush()
 
 
+@traced("assistant_turn", process_inputs=hide("session", "client"))
 async def run_assistant(
     session: AsyncSession,
     user_id: uuid.UUID,
