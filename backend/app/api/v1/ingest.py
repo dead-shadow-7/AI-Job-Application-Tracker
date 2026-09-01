@@ -20,9 +20,9 @@ from app.api.deps import CurrentUser, DbSession
 from app.core.config import settings
 from app.core.exceptions import InvalidOperationError
 from app.schemas.extraction import ExtractedJob
-from app.schemas.ingest import DuplicateHint, IngestPreview, IngestRequest, JobDraft
-from app.schemas.job import RequirementIn
+from app.schemas.ingest import DuplicateHint, IngestPreview, IngestRequest
 from app.services.applications import content_hash, job_embedding_text
+from app.services.job_drafts import build_job_draft
 from app.services.search import find_near_duplicate
 from app.services.skills import SkillResolution
 
@@ -64,26 +64,7 @@ async def ingest(payload: IngestRequest, user: CurrentUser, session: DbSession) 
     skills: SkillResolution = state.get("skills") or SkillResolution()
     usage = state.get("usage") or []
 
-    job = JobDraft(
-        company_name=extracted.company_name,
-        title=extracted.title,
-        seniority=extracted.seniority,
-        employment_type=extracted.employment_type,
-        work_mode=extracted.work_mode,
-        location=extracted.location,
-        url=payload.url,
-        source_platform=payload.source_platform,
-        description=state["cleaned_text"],
-        responsibilities=extracted.responsibilities,
-        salary_min=_decimal(extracted.salary.min_amount),
-        salary_max=_decimal(extracted.salary.max_amount),
-        salary_currency=extracted.salary.currency,
-        salary_period=extracted.salary.period,
-        years_experience_min=extracted.years_experience_min,
-        years_experience_max=extracted.years_experience_max,
-        requirements=[RequirementIn(text=r.text, kind=r.kind) for r in extracted.requirements],
-        skill_slugs=skills.slugs,
-    )
+    job = build_job_draft(state, url=payload.url, source_platform=payload.source_platform)
 
     needs_review = (
         extracted.confidence < REVIEW_CONFIDENCE_THRESHOLD
@@ -104,10 +85,6 @@ async def ingest(payload: IngestRequest, user: CurrentUser, session: DbSession) 
         latency_ms=sum(u.latency_ms for u in usage),
         duplicate_of=await _find_duplicate(session, user.id, state["cleaned_text"], extracted),
     )
-
-
-def _decimal(value: float | None) -> Decimal | None:
-    return None if value is None else Decimal(str(value))
 
 
 async def _find_duplicate(

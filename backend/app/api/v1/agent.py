@@ -39,6 +39,7 @@ from app.schemas.agent import (
     ChatRequest,
     ChatResponse,
     ConfirmCreateApplication,
+    ConfirmCreateFromPosting,
     ConfirmDeleteApplication,
     ConfirmEvent,
     ConfirmRequest,
@@ -114,7 +115,10 @@ async def confirm(
     if isinstance(payload, ConfirmDeleteApplication):
         result = ConfirmResult(kind=payload.kind, summary=await _delete(session, user_id, payload))
     else:
-        if isinstance(payload, ConfirmCreateApplication):
+        if isinstance(payload, ConfirmCreateFromPosting):
+            application = await _create_from_posting(session, user_id, payload)
+            summary = f"started tracking {payload.title} at {payload.company_name}"
+        elif isinstance(payload, ConfirmCreateApplication):
             application = await _create(session, user_id, payload)
             summary = f"started tracking {payload.title} at {payload.company_name}"
         elif isinstance(payload, ConfirmEvent):
@@ -128,11 +132,12 @@ async def confirm(
             summary = f"scheduled a {payload.stage_type.value} round"
 
         read = detail(await reload_application(session, application.id, user_id))
+        creating = isinstance(payload, ConfirmCreateApplication | ConfirmCreateFromPosting)
         result = ConfirmResult(
             kind=payload.kind,
-            summary=f"{summary} on {read.job.title} at {read.job.company.name}"
-            if not isinstance(payload, ConfirmCreateApplication)
-            else summary,
+            summary=summary
+            if creating
+            else f"{summary} on {read.job.title} at {read.job.company.name}",
             application=read,
         )
 
@@ -188,6 +193,29 @@ async def _create(
         ),
         priority="medium",
         notes=payload.notes,
+        initial_event=payload.initial_event,
+        occurred_at=_backdated(payload.occurred_days_ago),
+    )
+
+
+async def _create_from_posting(
+    session: AsyncSession, user_id: UUID, payload: ConfirmCreateFromPosting
+) -> Application:
+    """The full record, from a posting pasted into the conversation.
+
+    Identical to what the paste screen saves — same JobCreate fields, same
+    create service — because it came through the same ingestion graph. Skills,
+    requirements, salary and the embedding all land as they would have.
+    """
+    return await create_application(
+        session,
+        user_id=user_id,
+        job_id=None,
+        job_payload=JobCreate.model_validate(
+            payload.model_dump(exclude={"kind", "initial_event", "occurred_days_ago"})
+        ),
+        priority="medium",
+        notes=None,
         initial_event=payload.initial_event,
         occurred_at=_backdated(payload.occurred_days_ago),
     )

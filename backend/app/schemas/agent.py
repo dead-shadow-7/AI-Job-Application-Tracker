@@ -19,15 +19,25 @@ from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.domain.enums import EventType, InterviewStageType, Priority, WorkMode
 from app.schemas.application import ApplicationRead
+from app.schemas.job import JobCreate
+
+# Long enough to paste a whole job posting in, which is what people actually do
+# — 2,000 characters cut off mid-sentence on a real one. Not unbounded, because
+# the message is replayed as history on every later turn, so an oversized one is
+# paid for repeatedly rather than once. Pasting a posting for *extraction* still
+# belongs in /jobs/ingest, which takes 200,000 and validates each field against
+# the text; the assistant only reads what it is given.
+MAX_MESSAGE_CHARS = 10_000
 
 
 class ChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=2000)
+    message: str = Field(min_length=1, max_length=MAX_MESSAGE_CHARS)
 
 
 ActionKind = Literal[
     "append_event",
     "create_application",
+    "create_from_posting",
     "update_application",
     "schedule_interview",
     "delete_application",
@@ -153,6 +163,24 @@ class ConfirmCreateApplication(BaseModel):
     occurred_days_ago: int = Field(default=0, ge=0, le=3650)
 
 
+class ConfirmCreateFromPosting(JobCreate):
+    """Track a posting the user pasted into the conversation, in full.
+
+    Unlike the sibling above, this one *does* carry salary, requirements and
+    skills — because they came out of the ingestion graph, which validated them
+    against the pasted text rather than taking the model's word. The check that
+    matters is not "did the model produce a number" but "does the number appear
+    in the source", and that has already run by the time this is built.
+
+    Extends JobCreate so the fields cannot drift from the ones the paste screen
+    saves; both end up in the same `create_application` call.
+    """
+
+    kind: Literal["create_from_posting"]
+    initial_event: Literal[EventType.SAVED, EventType.APPLIED] = EventType.APPLIED
+    occurred_days_ago: int = Field(default=0, ge=0, le=3650)
+
+
 class ConfirmUpdateApplication(BaseModel):
     """Change priority or notes. Status is absent by design — it is derived from
     the event log, so moving an application means appending an event."""
@@ -199,6 +227,7 @@ class ConfirmDeleteApplication(BaseModel):
 ConfirmRequest = Annotated[
     ConfirmEvent
     | ConfirmCreateApplication
+    | ConfirmCreateFromPosting
     | ConfirmUpdateApplication
     | ConfirmScheduleInterview
     | ConfirmDeleteApplication,

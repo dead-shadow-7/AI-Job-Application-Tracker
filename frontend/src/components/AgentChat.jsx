@@ -16,15 +16,31 @@ import { api } from '@/lib/api'
  * propose four kinds of change now, and a switch here would be a fifth place to
  * forget to update when a fifth arrives.
  */
+// Mirrors MAX_MESSAGE_CHARS in backend/app/schemas/agent.py. Enforced here so
+// the limit is a full box rather than a red validation error after you have
+// already pasted and pressed send.
+const MAX_MESSAGE_CHARS = 10_000
+
 export function AgentChat({ open, onClose }) {
   const queryClient = useQueryClient()
   const [turns, setTurns] = useState([])
   const [draft, setDraft] = useState('')
   const endRef = useRef(null)
+  const inputRef = useRef(null)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [turns])
+
+  /* Grow to fit what is in it, up to a ceiling, then scroll. Height has to be
+     reset to auto first or scrollHeight only ever reports the taller of the
+     two and the box can grow but never shrink back. */
+  useEffect(() => {
+    const box = inputRef.current
+    if (!box) return
+    box.style.height = 'auto'
+    box.style.height = `${Math.min(box.scrollHeight, 200)}px`
+  }, [draft])
 
   const send = useMutation({
     mutationFn: (message) => api.agentChat(message),
@@ -70,11 +86,20 @@ export function AgentChat({ open, onClose }) {
       setTurns((t) => [...t, { role: 'agent', text: error.message, isError: true }]),
   })
 
+  function submit() {
+    const message = draft.trim()
+    if (!message || send.isPending) return
+    send.mutate(message)
+    setDraft('')
+  }
+
   if (!open) return null
 
+  /* max-w-xl rather than max-w-md: the drawer now renders whole job
+     descriptions, and 28rem wraps a posting into a column too narrow to read. */
   return (
     <aside
-      className="fixed inset-y-0 right-0 z-30 flex w-full max-w-md flex-col border-l border-border-subtle bg-surface shadow-xl"
+      className="fixed inset-y-0 right-0 z-30 flex w-full max-w-xl flex-col border-l border-border-subtle bg-surface shadow-xl"
       role="dialog"
       aria-label="Assistant"
     >
@@ -238,28 +263,54 @@ export function AgentChat({ open, onClose }) {
       </div>
 
       <form
-        className="flex gap-2 border-t border-border-subtle p-3"
+        className="border-t border-border-subtle p-3"
         onSubmit={(e) => {
           e.preventDefault()
-          if (!draft.trim()) return
-          send.mutate(draft.trim())
-          setDraft('')
+          submit()
         }}
       >
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Ask, or say what happened…"
-          aria-label="Message the assistant"
-          className="min-w-0 flex-1 rounded-lg border border-border-subtle px-3 py-2 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
-        />
-        <button
-          type="submit"
-          disabled={send.isPending || !draft.trim()}
-          className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-60"
-        >
-          Send
-        </button>
+        <div className="flex items-end gap-2">
+          {/* A textarea, not an input: what gets pasted here is a chunk of a
+              job posting, and a single line shows you the last few words of it
+              with no way to check what you actually pasted. Grows to a few
+              lines, then scrolls. */}
+          <textarea
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter sends, Shift+Enter breaks the line. Without the split
+              // there is no way to write a second line at all, and without
+              // preventDefault Enter would insert one *and* submit.
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                submit()
+              }
+            }}
+            rows={1}
+            maxLength={MAX_MESSAGE_CHARS}
+            placeholder="Ask, or say what happened…  (Shift+Enter for a new line)"
+            aria-label="Message the assistant"
+            className="min-w-0 flex-1 resize-none overflow-y-auto rounded-lg border border-border-subtle px-3 py-2 text-sm leading-relaxed outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+          />
+          <button
+            type="submit"
+            disabled={send.isPending || !draft.trim()}
+            className="shrink-0 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-60"
+          >
+            Send
+          </button>
+        </div>
+
+        {/* Only once it is close to mattering. A counter sitting there from the
+            first keystroke reads as a constraint on ordinary questions, which
+            this is not — it is a guard against pasting an entire document. */}
+        {draft.length > MAX_MESSAGE_CHARS * 0.8 && (
+          <p className="mt-1 text-right text-xs text-ink-muted">
+            {draft.length.toLocaleString()} / {MAX_MESSAGE_CHARS.toLocaleString()}
+            {draft.length >= MAX_MESSAGE_CHARS && ' — to track a whole posting, paste it instead'}
+          </p>
+        )}
       </form>
     </aside>
   )

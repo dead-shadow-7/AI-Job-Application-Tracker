@@ -597,6 +597,174 @@ async def test_nothing_is_attached_when_there_is_no_description(client: AsyncCli
     assert body["attachments"] == []
 
 
+# --- Pasting a posting into the conversation -------------------------------
+
+
+async def test_a_pasted_posting_is_tracked_with_everything_in_it(
+    client: AsyncClient, llm, monkeypatch
+) -> None:
+    """Pasting a whole description and being told "salary and skills are not
+    captured this way, paste it somewhere else" was the wrong answer — it stored
+    two fields out of a document the user had already handed over. The chat path
+    now runs the same ingestion graph the paste screen runs."""
+    from tests.test_ingest import POSTING, StubLLM
+
+    extractor = StubLLM()
+    monkeypatch.setattr("app.agent.graphs.ingestion.llm_client", extractor)
+    llm(
+        calls("propose_tracked_posting", source_platform="LinkedIn", status="applied"),
+        says("Confirm and I will track it with the full posting."),
+    )
+    user = await Session(client).start()
+
+    action = (
+        await user.post("/api/v1/agent/chat", {"message": POSTING + "\n\nAdd this, I applied."})
+    ).json()["pending_action"]
+
+    assert action["kind"] == "create_from_posting"
+    assert extractor.calls == 1, "the real extraction graph must have run"
+
+    saved = (
+        await user.post("/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]})
+    ).json()["application"]
+    job = saved["job"]
+
+    assert job["company"]["name"] == "Razorpay"
+    assert float(job["salary_min"]) == 4_500_000, "salary survives, because it was verified"
+    assert len(job["skills"]) > 0, "skills are normalised and attached"
+    assert len(job["requirements"]) > 0
+    assert job["description"], "the posting itself is stored, not just a summary"
+    assert saved["current_status"] == "applied"
+
+
+async def test_the_card_says_what_was_captured_and_what_was_dropped(
+    client: AsyncClient, llm, monkeypatch
+) -> None:
+    """A silently absent salary looks like the posting never stated one, rather
+    than like the verbatim check fired."""
+    from tests.test_ingest import POSTING, StubLLM, extraction
+
+    # A salary the model invented — it appears nowhere in the posting text.
+    invented = extraction(
+        salary={
+            "raw_text": "90 LPA",
+            "min_amount": 9_000_000,
+            "max_amount": 9_000_000,
+            "currency": "INR",
+            "period": "year",
+        }
+    )
+    monkeypatch.setattr("app.agent.graphs.ingestion.llm_client", StubLLM(invented))
+    llm(calls("propose_tracked_posting"), says("Confirm to track it."))
+    user = await Session(client).start()
+
+    action = (await user.post("/api/v1/agent/chat", {"message": POSTING})).json()["pending_action"]
+
+    shown = " ".join(action["details"])
+    assert "Skills captured" in shown
+    assert "Requirements captured" in shown
+    assert "salary" in shown.lower(), "the drop has to be named on the card"
+
+
+async def test_a_one_line_request_is_sent_back_to_the_simpler_tool(
+    client: AsyncClient, llm
+) -> None:
+    """Running extraction on "add the Amazon SDE role" spends a model call to
+    learn what the sentence already says, and returns a confident record built
+    from nothing."""
+    stub = llm(calls("propose_tracked_posting"), says("Which company and role?"))
+    user = await Session(client).start()
+
+    body = (await user.post("/api/v1/agent/chat", {"message": "add the Amazon SDE role"})).json()
+
+    assert body["pending_action"] is None
+    assert "propose_new_application" in stub.tool_output()
+
+
+async def test_a_pasted_posting_already_tracked_is_not_duplicated(
+    client: AsyncClient, llm, monkeypatch
+) -> None:
+    from tests.test_ingest import POSTING, StubLLM
+
+    monkeypatch.setattr("app.agent.graphs.ingestion.llm_client", StubLLM())
+    stub = llm(calls("propose_tracked_posting"), says("You already track that."))
+    user = await Session(client).start()
+    await user.create_application(company_name="Razorpay", title="Backend Engineer")
+
+    body = (await user.post("/api/v1/agent/chat", {"message": POSTING})).json()
+
+    assert body["pending_action"] is None
+    assert "already track" in stub.tool_output()
+
+
+# --- Message size ----------------------------------------------------------
+
+
+async def test_a_pasted_posting_fits_in_one_message(client: AsyncClient, llm) -> None:
+    """2,000 characters cut a real job posting off mid-sentence, and the only
+    signal was a red validation error after the paste."""
+    llm(says("That looks like a backend role."))
+    user = await Session(client).start()
+
+    response = await user.post("/api/v1/agent/chat", {"message": "x" * 9_000})
+
+    assert response.status_code == 200
+
+
+async def test_an_oversized_message_is_still_refused(client: AsyncClient, llm) -> None:
+    """Unbounded would be worse than 2,000 was. The message is replayed as
+    history on later turns, so an enormous one is paid for repeatedly."""
+    llm(says("ok"))
+    user = await Session(client).start()
+
+    response = await user.post("/api/v1/agent/chat", {"message": "x" * 10_001})
+
+    assert response.status_code == 422
+
+
+async def test_replayed_history_is_bounded_by_size_not_only_by_turns(
+    client: AsyncClient, llm
+) -> None:
+    """Ten turns was a fine budget at 2,000 characters and is not at 10,000:
+    replaying them would put ~25,000 tokens in front of every later question,
+    so one pasted posting gets paid for on every turn that follows it."""
+    from app.agent.assistant import HISTORY_CHARS
+
+    stub = llm(says("noted"))
+    user = await Session(client).start()
+
+    for i in range(4):
+        await user.post("/api/v1/agent/chat", {"message": f"posting {i} " + "x" * 5_000})
+    await user.post("/api/v1/agent/chat", {"message": "what did I just paste?"})
+
+    replayed = sum(
+        len(m["content"]) for m in stub.messages_seen[-1] if m.get("role") in {"user", "assistant"}
+    )
+    assert replayed <= HISTORY_CHARS + 10_000, "the budget is not being applied"
+
+    # The newest turn survives; the oldest is what gets dropped.
+    contents = " ".join(
+        str(m.get("content")) for m in stub.messages_seen[-1] if m.get("role") == "user"
+    )
+    assert "posting 3" in contents
+    assert "posting 0" not in contents
+
+
+async def test_a_single_turn_survives_even_if_it_exceeds_the_budget(
+    client: AsyncClient, llm
+) -> None:
+    """Dropping everything would leave the model with no thread at all, which
+    is worse than being slightly over budget for one turn."""
+    stub = llm(says("noted"))
+    user = await Session(client).start()
+
+    await user.post("/api/v1/agent/chat", {"message": "y" * 10_000})
+    await user.post("/api/v1/agent/chat", {"message": "and?"})
+
+    replayed = [m for m in stub.messages_seen[-1] if m.get("role") in {"user", "assistant"}]
+    assert replayed, "history must not come back empty"
+
+
 # --- Wiring ----------------------------------------------------------------
 
 
@@ -657,10 +825,10 @@ async def test_a_null_optional_argument_does_not_break_the_turn(client: AsyncCli
 def test_every_advertised_tool_has_a_handler() -> None:
     """A tool the model can see but nothing can run produces a baffling "no such
     tool" at runtime, from a list it was explicitly given."""
-    from app.agent.tools import _PROPOSERS, _READERS, TOOL_SCHEMAS
+    from app.agent.tools import HANDLED, TOOL_SCHEMAS
 
     advertised = [t["function"]["name"] for t in TOOL_SCHEMAS]
-    assert set(advertised) == set(_READERS) | set(_PROPOSERS)
+    assert set(advertised) == HANDLED
     assert len(set(advertised)) == len(advertised), "a tool name is declared twice"
 
 

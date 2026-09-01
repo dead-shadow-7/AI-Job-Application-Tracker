@@ -160,6 +160,118 @@ async def propose_new_application(
     )
 
 
+async def propose_tracked_posting(
+    session: AsyncSession, user_id: uuid.UUID, arguments: dict[str, Any], *, message: str
+) -> tuple[str, dict[str, Any] | None]:
+    """Track a posting the user pasted into the conversation, in full.
+
+    ``propose_new_application`` records a company and a title because that is
+    all a sentence contains. When the posting itself is in the message there is
+    no reason to throw the rest away, and doing so was the wrong answer to "add
+    this job" — it stored two fields out of a document and told the user to go
+    and paste it again somewhere else.
+
+    So this runs the same ingestion graph the paste screen runs: extraction
+    against the strict schema, the validation pass that drops a salary not
+    present verbatim, company resolution and skill normalisation. Same pipeline,
+    same guarantees, one less round trip for the user.
+
+    The posting text is read from the message server-side and never passed
+    through the model. Asking it to echo a document back as a tool argument
+    costs the tokens twice and arrives rewritten — the same failure that made
+    "share the JD" return a summary of itself.
+    """
+    from app.agent.graphs.ingestion import run_ingestion
+    from app.services.job_drafts import MIN_POSTING_CHARS, build_job_draft
+
+    text = message.strip()
+    if len(text) < MIN_POSTING_CHARS:
+        return (
+            "There is no posting in that message — only a sentence. Use "
+            "propose_new_application for the company and title, or ask them to paste "
+            "the description if they want the skills and salary captured too.",
+            None,
+        )
+
+    state = await run_ingestion(
+        session=session,
+        raw_text=text,
+        url=arguments.get("url"),
+        source_platform=arguments.get("source_platform"),
+        user_id=str(user_id),
+    )
+    if state.get("error") or state.get("extracted") is None:
+        return f"Could not read that posting: {state.get('error') or 'extraction failed'}.", None
+
+    draft = build_job_draft(
+        state, url=arguments.get("url"), source_platform=arguments.get("source_platform")
+    )
+    if not draft.company_name or not draft.title:
+        return (
+            "The posting does not name the company or the role clearly. Ask them which "
+            "it is rather than guessing — postings routinely omit the employer.",
+            None,
+        )
+
+    duplicate = await _already_tracked(session, user_id, draft.company_name, draft.title)
+    if duplicate is not None:
+        return (
+            f"They already track {duplicate}. Do not add a second one — ask whether they "
+            "meant to record an event on it instead.",
+            None,
+        )
+
+    applied = str(arguments.get("status", "applied")).lower() != "saved"
+    days_ago = _non_negative(arguments.get("applied_days_ago"))
+    report = state["report"]
+
+    details = [f"Company: {draft.company_name}", f"Role: {draft.title}"]
+    if draft.location:
+        details.append(
+            f"Location: {draft.location}{f' ({draft.work_mode})' if draft.work_mode else ''}"
+        )
+    if draft.salary_min or draft.salary_max:
+        details.append(
+            f"Salary: {draft.salary_min or '?'}-{draft.salary_max or '?'} "
+            f"{draft.salary_currency or ''} per {draft.salary_period or 'year'}"
+        )
+    details.append(f"Skills captured: {len(draft.skill_slugs)}")
+    details.append(f"Requirements captured: {len(draft.requirements)}")
+    details.append(f"Full description stored: {len(draft.description or '')} characters")
+    if draft.url:
+        details.append(f"Link: {draft.url}")
+    if report.dropped_fields:
+        # Named on the card because a silently absent salary looks like the
+        # posting did not state one, rather than like a check that fired.
+        details.append(f"Dropped as unverifiable: {', '.join(report.dropped_fields)}")
+    details.append(
+        f"Recorded as: applied {days_ago} days ago"
+        if applied
+        else "Recorded as: saved, not applied"
+    )
+
+    payload = draft.model_dump(mode="json")
+    payload["initial_event"] = EventType.APPLIED.value if applied else EventType.SAVED.value
+    payload["occurred_days_ago"] = days_ago
+
+    warned = (
+        f" Salary was dropped as unverifiable: {', '.join(report.dropped_fields)}."
+        if (report.dropped_fields)
+        else ""
+    )
+    return (
+        f"Prepared, pending confirmation: track {draft.title} at {draft.company_name} with the "
+        f"full posting, {len(draft.skill_slugs)} skills and {len(draft.requirements)} "
+        f"requirements.{warned} Summarise what was captured and ask them to confirm.",
+        {
+            "kind": "create_from_posting",
+            "summary": f"Track {draft.title} at {draft.company_name}, with the full posting",
+            "details": details,
+            "payload": payload,
+        },
+    )
+
+
 async def propose_update(
     session: AsyncSession, user_id: uuid.UUID, arguments: dict[str, Any]
 ) -> tuple[str, dict[str, Any] | None]:

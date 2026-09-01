@@ -28,6 +28,12 @@ logger = logging.getLogger(__name__)
 # refers to the last few messages, not to something said twenty turns ago.
 HISTORY_TURNS = 10
 
+# Turns alone are the wrong unit once a message can be 10,000 characters: ten of
+# those replay ~25,000 tokens on every subsequent request, so one pasted posting
+# is paid for again on each turn that follows it. The budget keeps the newest
+# turns and drops the oldest, which is also the right order to lose them in.
+HISTORY_CHARS = 12_000
+
 # The loop must terminate. Each round is one model call plus its tools, and a
 # model that has not answered after this many rounds is looping rather than
 # working — better to say so than to keep spending the token budget.
@@ -58,7 +64,7 @@ class AssistantResult:
 
 
 async def load_history(session: AsyncSession, user_id: uuid.UUID) -> list[dict[str, str]]:
-    """Recent turns, oldest first."""
+    """Recent turns, oldest first, within both a turn and a character budget."""
     rows = list(
         (
             await session.execute(
@@ -71,7 +77,16 @@ async def load_history(session: AsyncSession, user_id: uuid.UUID) -> list[dict[s
         .scalars()
         .all()
     )
-    return [{"role": m.role, "content": m.content} for m in reversed(rows)]
+
+    kept: list[dict[str, str]] = []
+    budget = HISTORY_CHARS
+    for message in rows:  # newest first, so the budget is spent on recent context
+        budget -= len(message.content)
+        if budget < 0 and kept:
+            break
+        kept.append({"role": message.role, "content": message.content})
+
+    return list(reversed(kept))
 
 
 async def save_turn(
@@ -124,7 +139,7 @@ async def run_assistant(
             except json.JSONDecodeError:
                 arguments = {}
 
-            result = await run_tool(name, arguments, session, user_id)
+            result = await run_tool(name, arguments, session, user_id, message=message)
             tools_used.append(name)
             if result.proposal is not None and not (proposal and KEEP_FIRST_PROPOSAL):
                 proposal = result.proposal

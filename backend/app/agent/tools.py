@@ -26,7 +26,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -226,9 +226,28 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         ["query", "event_type"],
     ),
     _tool(
+        "propose_tracked_posting",
+        "Use this when their message CONTAINS the job posting itself. Reads the posting "
+        "straight from their message — do not retype it — and extracts company, role, "
+        "salary, skills, requirements and the full text, the same way the paste screen "
+        "does. Does NOT apply it. Prefer this over propose_new_application whenever a "
+        "description was pasted.",
+        {
+            "url": _str("Link to the posting, if they gave one."),
+            "source_platform": _str("Where they found it, e.g. LinkedIn."),
+            "status": {
+                "type": "string",
+                "enum": ["saved", "applied"],
+                "description": "Whether they have already applied. Default applied.",
+            },
+            "applied_days_ago": _days("If already applied, how many days ago. 0 for today."),
+        },
+    ),
+    _tool(
         "propose_new_application",
-        "Propose tracking a job they described. Does NOT apply it. Salary and skills are not "
-        "captured this way — say that pasting the description is what fills those in.",
+        "Propose tracking a job they only NAMED, with no description in the message. Does "
+        "NOT apply it. Records company and title only — if they pasted the posting, use "
+        "propose_tracked_posting instead, which keeps the salary and skills.",
         {
             "company_name": _str("The employer. Required."),
             "title": _str("The role title. Required."),
@@ -304,14 +323,29 @@ Handler = Callable[[AsyncSession, uuid.UUID, dict[str, Any]], Awaitable[str | To
 
 
 async def run_tool(
-    name: str, arguments: dict[str, Any], session: AsyncSession, user_id: uuid.UUID
+    name: str,
+    arguments: dict[str, Any],
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    *,
+    message: str = "",
 ) -> ToolResult:
     """Execute a tool.
+
+    ``message`` is the user's turn verbatim. One tool needs it: tracking a
+    pasted posting reads the text from here rather than from an argument, so
+    the model never has to echo a document back — which costs the tokens twice
+    and returns it rewritten.
 
     Unknown names return an error string rather than raising: a model that
     hallucinates a tool should be told so and allowed to correct itself, not
     crash the request.
     """
+    needs_message = _MESSAGE_PROPOSERS.get(name)
+    if needs_message is not None:
+        text, proposal = await needs_message(session, user_id, arguments, message=message)
+        return ToolResult(output=_clip(text), proposal=proposal)
+
     proposer = _PROPOSERS.get(name)
     if proposer is not None:
         text, proposal = await proposer(session, user_id, arguments)
@@ -530,7 +564,33 @@ _PROPOSERS: dict[str, Proposer] = {
     "propose_delete": proposals.propose_delete,
 }
 
+
 # Cheap insurance against a schema and its handler drifting apart — a tool the
 # model can see but nothing can run produces a baffling "No such tool" at
 # runtime, from a list the model was explicitly given.
-assert {t["function"]["name"] for t in TOOL_SCHEMAS} == set(_READERS) | set(_PROPOSERS)
+class MessageProposer(Protocol):
+    """A proposer that also needs the user's turn verbatim.
+
+    Its own registry rather than a branch in the dispatch, so the coverage
+    assertion below still sees every tool. A tool reachable only through a
+    special case is exactly the one that gets dropped when the dispatch is next
+    rearranged.
+    """
+
+    async def __call__(
+        self,
+        session: AsyncSession,
+        user_id: uuid.UUID,
+        arguments: dict[str, Any],
+        *,
+        message: str,
+    ) -> tuple[str, dict[str, Any] | None]: ...
+
+
+_MESSAGE_PROPOSERS: dict[str, MessageProposer] = {
+    "propose_tracked_posting": proposals.propose_tracked_posting,
+}
+
+HANDLED = set(_READERS) | set(_PROPOSERS) | set(_MESSAGE_PROPOSERS)
+
+assert {t["function"]["name"] for t in TOOL_SCHEMAS} == HANDLED
