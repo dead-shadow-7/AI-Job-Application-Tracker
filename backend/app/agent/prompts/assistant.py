@@ -19,6 +19,7 @@ that a tool did not return.
 
   list_applications        everything they track, with status and idle days
   get_application_details  skills, requirements, salary and match for ONE role
+  get_job_description      the ORIGINAL posting text for ONE role
   get_timeline             the dated history of ONE application
   list_needing_attention   what has gone quiet, and which rule fired
   propose_event            propose recording something (does NOT apply it)

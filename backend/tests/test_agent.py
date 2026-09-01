@@ -295,3 +295,41 @@ async def test_a_model_failure_is_reported_not_swallowed(client: AsyncClient, ll
 
 async def test_the_assistant_requires_authentication(client: AsyncClient) -> None:
     assert (await client.post("/api/v1/agent/chat", json={"message": "hi"})).status_code == 401
+
+
+async def test_the_posting_text_is_reachable(client: AsyncClient, llm) -> None:
+    """A summary is not the posting.
+
+    Asking for the JD previously returned the same structured summary with
+    different formatting, because job.description was never exposed to any
+    tool — the model had nothing else to work from and reformatted what it had.
+    """
+    stub = llm(
+        calls("get_job_description", query="Amazon"),
+        says("The posting asks you to build RAG pipelines."),
+    )
+    user = await Session(client).start()
+    await user.create_application(
+        company_name="Amazon",
+        description="Key Responsibilities\n- Build RAG pipelines\n- Develop REST APIs",
+    )
+
+    await user.post("/api/v1/agent/chat", {"message": "give me its JD"})
+
+    tool_output = [m for m in stub.messages_seen[-1] if m.get("role") == "tool"][0]["content"]
+    assert "Build RAG pipelines" in tool_output, "the raw posting must reach the model"
+    assert "Develop REST APIs" in tool_output
+
+
+async def test_a_hand_entered_job_says_it_has_no_description(client: AsyncClient, llm) -> None:
+    """Better than returning nothing, which reads as a broken tool."""
+    stub = llm(calls("get_job_description", query="Amazon"), says("None was stored."))
+    user = await Session(client).start()
+    # The factory supplies a description by default; a hand-entered job has none.
+    await user.create_application(company_name="Amazon", description=None)
+
+    await user.post("/api/v1/agent/chat", {"message": "show me the JD"})
+
+    tool_output = [m for m in stub.messages_seen[-1] if m.get("role") == "tool"][0]["content"]
+    assert "No description was stored" in tool_output
+    assert "entered by hand" in tool_output

@@ -81,6 +81,25 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "get_job_description",
+            "description": (
+                "The original job posting text, as it was pasted or written. Use this "
+                "when asked for the JD, the description, the responsibilities, or "
+                "anything phrased 'what does the posting actually say'. The other "
+                "tools return a structured summary; this returns the source."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "How the user referred to it."}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "list_needing_attention",
             "description": (
                 "Applications that have gone quiet, with how long and which follow-up "
@@ -147,6 +166,8 @@ async def run_tool(
         return await _details(session, user_id, arguments.get("query", "")), None
     if name == "get_timeline":
         return await _timeline(session, user_id, arguments.get("query", "")), None
+    if name == "get_job_description":
+        return await _description(session, user_id, arguments.get("query", "")), None
     if name == "list_needing_attention":
         return await _needing_attention(session, user_id), None
     if name == "propose_event":
@@ -250,6 +271,38 @@ async def _timeline(session: AsyncSession, user_id: uuid.UUID, query: str) -> st
         note = f" — {event.note}" if event.note else ""
         lines.append(f"  {stamp}: {event.event_type}{note}")
     return "\n".join(lines)
+
+
+# A pasted posting can run to tens of thousands of characters. Truncated so one
+# request cannot swallow the 8000 token-per-minute budget on its own; the cut is
+# announced rather than silent, so the model does not summarise a fragment as
+# though it were the whole thing.
+MAX_DESCRIPTION_CHARS = 6000
+
+
+async def _description(session: AsyncSession, user_id: uuid.UUID, query: str) -> str:
+    """The posting as written.
+
+    Kept apart from get_application_details deliberately. That tool returns a
+    structured summary, and merging the two would put a full posting into every
+    detail lookup — expensive, and usually not what was asked for.
+    """
+    application, problem = await _resolved(session, user_id, query)
+    if application is None:
+        return problem or "No such application."
+
+    job = application.job
+    if not job.description:
+        return (
+            f"No description was stored for {job.title} at {job.company.name}. "
+            "It was probably entered by hand rather than pasted."
+        )
+
+    text = job.description
+    if len(text) > MAX_DESCRIPTION_CHARS:
+        text = text[:MAX_DESCRIPTION_CHARS] + "\n\n[truncated — this is the first part only]"
+
+    return f"Job description for {job.title} at {job.company.name}:\n\n{text}"
 
 
 async def _needing_attention(session: AsyncSession, user_id: uuid.UUID) -> str:
