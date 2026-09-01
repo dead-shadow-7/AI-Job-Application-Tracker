@@ -31,7 +31,17 @@ HISTORY_TURNS = 10
 # The loop must terminate. Each round is one model call plus its tools, and a
 # model that has not answered after this many rounds is looping rather than
 # working — better to say so than to keep spending the token budget.
-MAX_ROUNDS = 4
+#
+# Six rather than four because the useful chains got longer: "how am I doing and
+# what should I chase" is analytics, then attention, then a timeline, then the
+# answer. Four rounds cut those off mid-thought, which reads to the user as the
+# assistant giving up rather than as a limit being hit.
+MAX_ROUNDS = 6
+
+# A proposal is a question to the user, and two questions in one reply cannot
+# both be answered — the confirm card only renders one. If the model proposes
+# twice in a turn the first is kept, because it is the one it explained.
+KEEP_FIRST_PROPOSAL = True
 
 
 @dataclass
@@ -110,7 +120,7 @@ async def run_assistant(
 
             output, maybe_proposal = await run_tool(name, arguments, session, user_id)
             tools_used.append(name)
-            if maybe_proposal is not None:
+            if maybe_proposal is not None and not (proposal and KEEP_FIRST_PROPOSAL):
                 proposal = maybe_proposal
 
             messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})

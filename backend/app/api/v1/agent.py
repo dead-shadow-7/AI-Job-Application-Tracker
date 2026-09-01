@@ -2,16 +2,27 @@
 
 The safety boundary lives here rather than in the model. `/chat` performs no
 writes under any circumstances — it returns a proposal. `/confirm` performs the
-write, and takes an application *id* that the user has already seen resolved.
+write, from a typed request the user has already seen described in full.
 
 That split is what makes a language model safe to point at someone's job
 history. A misread instruction produces a wrong confirmation dialog, which the
 user rejects, rather than a wrong row that nobody notices for weeks.
+
+The proposal travels out through the client and back, so by the time it lands
+here it is untrusted input like any other — "the model proposed it" is not
+validation. Every branch below re-validates through a typed schema and goes
+through the same services the manual UI uses, with `source='agent'` on the
+resulting events so an agent-made change is visible on the timeline and
+reversible by appending a correction.
 """
 
 import logging
+from datetime import UTC, datetime, timedelta
+from typing import Annotated
 
-from fastapi import APIRouter, status
+from fastapi import APIRouter, Body, status
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.assistant import run_assistant
 from app.agent.llm_client import LLMError, llm_client
@@ -19,14 +30,22 @@ from app.agent.prompts.assistant import ASSISTANT_PROMPT_VERSION
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import settings
 from app.core.exceptions import InvalidOperationError
-from app.domain.enums import EventSource
+from app.domain.enums import EventSource, EventType
+from app.models.application import Application, InterviewStage
+from app.models.user import User
 from app.schemas.agent import (
     ActionPreview,
     ChatRequest,
     ChatResponse,
+    ConfirmCreateApplication,
+    ConfirmEvent,
     ConfirmRequest,
+    ConfirmScheduleInterview,
+    ConfirmUpdateApplication,
 )
-from app.schemas.application import ApplicationRead
+from app.schemas.application import ApplicationRead, detail
+from app.schemas.job import JobCreate
+from app.services.applications import create_application
 from app.services.events import append_event, get_application, reload_application
 from app.services.followups import ensure_default_rules
 
@@ -34,18 +53,13 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 
-# The whole picture is put in the prompt rather than fetched through tools: a
-# job search is tens of applications, so it fits, and one call beats three
-# round trips on a tight token budget. Bounded so a heavy user cannot silently
-# blow the context window.
-
 
 @router.post("/chat", response_model=ChatResponse, summary="Ask the assistant")
 async def chat(payload: ChatRequest, user: CurrentUser, session: DbSession) -> ChatResponse:
     """Answer, using tools as needed. Never writes.
 
-    Every tool the loop can reach is read-only; `propose_event` records an
-    intention and returns it here for confirmation. So a misread instruction
+    Every tool the loop can reach is read-only; the `propose_*` tools record an
+    intention and return it here for confirmation. So a misread instruction
     produces a dialog the user rejects, not a changed row.
     """
     if not llm_client.is_configured:
@@ -61,16 +75,14 @@ async def chat(payload: ChatRequest, user: CurrentUser, session: DbSession) -> C
     except LLMError as exc:
         raise InvalidOperationError(str(exc)) from exc
 
-    response = ChatResponse(
+    return ChatResponse(
         message=result.message,
+        pending_action=ActionPreview(**result.proposal) if result.proposal else None,
         model=settings.extraction_model,
         prompt_version=ASSISTANT_PROMPT_VERSION,
+        tools_used=result.tools_used,
+        total_tokens=result.total_tokens,
     )
-
-    if result.proposal:
-        response.pending_action = ActionPreview(**result.proposal)
-
-    return response
 
 
 @router.post(
@@ -80,26 +92,131 @@ async def chat(payload: ChatRequest, user: CurrentUser, session: DbSession) -> C
     summary="Carry out a proposed action",
 )
 async def confirm(
-    payload: ConfirmRequest, user: CurrentUser, session: DbSession
+    payload: Annotated[ConfirmRequest, Body()], user: CurrentUser, session: DbSession
 ) -> ApplicationRead:
-    """Append the confirmed event.
+    """Perform the confirmed change and return the application it landed on.
 
-    Takes an application id, not the original phrase: re-resolving now could
-    land somewhere different if the data changed in between, and the user
-    confirmed one specific row.
-
-    Written with source='agent', so it appears on the timeline marked as such
-    and is undone by appending a correction rather than by editing history.
+    Existing applications are named by id, not by the original phrase:
+    re-resolving now could land somewhere different if the data changed in
+    between, and the user confirmed one specific row.
     """
-    application = await get_application(session, payload.application_id, user.id)
+    # Read off the ORM object before anything writes. Appending an event expires
+    # application rows in the identity map, and a `user` that has to reload
+    # itself mid-request cannot do so lazily in async context.
+    user_id = user.id
 
+    if isinstance(payload, ConfirmCreateApplication):
+        application = await _create(session, user, payload)
+    elif isinstance(payload, ConfirmEvent):
+        application = await _append(session, user, payload)
+    elif isinstance(payload, ConfirmUpdateApplication):
+        application = await _update(session, user, payload)
+    else:
+        application = await _schedule(session, user, payload)
+
+    return detail(await reload_application(session, application.id, user_id))
+
+
+def _backdated(days: int) -> datetime | None:
+    """Days-ago into a timestamp. Returns None for today so `append_event` uses
+    its own clock rather than one we computed a few milliseconds earlier."""
+    return None if days <= 0 else datetime.now(UTC) - timedelta(days=days)
+
+
+async def _append(session: AsyncSession, user: User, payload: ConfirmEvent) -> Application:
+    application = await get_application(session, payload.application_id, user.id)
     await append_event(
         session,
         application=application,
         event_type=payload.event_type,
+        occurred_at=payload.occurred_at,
         source=EventSource.AGENT,
         note=payload.note,
     )
-    return ApplicationRead.model_validate(
-        await reload_application(session, application.id, user.id)
+    return application
+
+
+async def _create(
+    session: AsyncSession, user: User, payload: ConfirmCreateApplication
+) -> Application:
+    """Track a job described in conversation.
+
+    Goes through the ordinary create service, so the company is deduplicated and
+    the job embedded exactly as it would be from the manual form. The record is
+    thin by design — no salary, requirements or skills — and pasting the
+    description later fills those in against the posting text.
+    """
+    return await create_application(
+        session,
+        user_id=user.id,
+        job_id=None,
+        job_payload=JobCreate(
+            company_name=payload.company_name,
+            title=payload.title,
+            url=payload.url,
+            location=payload.location,
+            work_mode=payload.work_mode,
+            source_platform=payload.source_platform,
+        ),
+        priority="medium",
+        notes=payload.notes,
+        initial_event=payload.initial_event,
+        occurred_at=_backdated(payload.occurred_days_ago),
     )
+
+
+async def _update(
+    session: AsyncSession, user: User, payload: ConfirmUpdateApplication
+) -> Application:
+    application = await get_application(session, payload.application_id, user.id)
+    if payload.priority is not None:
+        application.priority = payload.priority.value
+    if payload.notes is not None:
+        application.notes = payload.notes
+    await session.flush()
+    return application
+
+
+async def _schedule(
+    session: AsyncSession, user: User, payload: ConfirmScheduleInterview
+) -> Application:
+    """Add the round and record that scheduling happened.
+
+    The future date goes on the stage; the event is stamped now. An event dated
+    in the future would push `last_activity_at` forward and make a stalled
+    application look fresh, silently disabling the follow-up detection.
+    """
+    application = await get_application(session, payload.application_id, user.id)
+
+    round_number = payload.round_number
+    if round_number is None:
+        highest = (
+            await session.execute(
+                select(func.max(InterviewStage.round_number)).where(
+                    InterviewStage.application_id == application.id
+                )
+            )
+        ).scalar_one_or_none()
+        round_number = (highest or 0) + 1
+
+    session.add(
+        InterviewStage(
+            application_id=application.id,
+            user_id=user.id,
+            round_number=round_number,
+            stage_type=payload.stage_type.value,
+            scheduled_at=datetime.now(UTC) + timedelta(days=payload.in_days),
+            interviewer=payload.interviewer,
+            notes=payload.notes,
+        )
+    )
+    await session.flush()
+
+    await append_event(
+        session,
+        application=application,
+        event_type=EventType.INTERVIEW_SCHEDULED,
+        source=EventSource.AGENT,
+        note=payload.notes,
+    )
+    return application

@@ -51,9 +51,11 @@ os.environ["ENVIRONMENT"] = "ci"
 
 import asyncio  # noqa: E402
 import hashlib  # noqa: E402
+import json  # noqa: E402
 import uuid  # noqa: E402
 from collections.abc import AsyncIterator  # noqa: E402
 from datetime import UTC, datetime, timedelta  # noqa: E402
+from typing import Any  # noqa: E402
 
 import asyncpg  # noqa: E402
 import jwt  # noqa: E402
@@ -230,3 +232,89 @@ def embeddings(monkeypatch: pytest.MonkeyPatch) -> StubEmbeddings:
     stub = StubEmbeddings()
     monkeypatch.setattr("app.services.embeddings.embedding_provider", stub)
     return stub
+
+
+# --- The scripted assistant ------------------------------------------------
+#
+# Shared here rather than in one test module because more than one file drives
+# the agent now. The important detail is *where* it patches: the loop resolves
+# `llm_client` in app.agent.assistant, and an earlier version patched the
+# endpoint's import instead — which left the suite quietly calling the live API
+# on every run.
+
+
+def says(content: str) -> dict[str, Any]:
+    """A turn where the model answers."""
+    return {"role": "assistant", "content": content}
+
+
+def calls(name: str, **arguments: Any) -> dict[str, Any]:
+    """A turn where the model requests one tool."""
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": f"call_{name}",
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(arguments)},
+            }
+        ],
+    }
+
+
+def calls_many(*named_arguments: tuple[str, dict[str, Any]]) -> dict[str, Any]:
+    """A turn requesting several tools at once."""
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": f"call_{index}",
+                "type": "function",
+                "function": {"name": name, "arguments": json.dumps(arguments)},
+            }
+            for index, (name, arguments) in enumerate(named_arguments)
+        ],
+    }
+
+
+class ScriptedLLM:
+    """Returns each scripted turn in order, then repeats the last."""
+
+    def __init__(self, *turns: dict[str, Any], error: Exception | None = None) -> None:
+        self._turns = list(turns) or [says("Nothing to do.")]
+        self._error = error
+        self.calls = 0
+        self.is_configured = True
+        self.messages_seen: list[list[dict[str, Any]]] = []
+
+    async def chat(self, *, messages: list[dict[str, Any]], **_: Any) -> Any:
+        from app.agent.llm_client import LLMUsage
+
+        self.messages_seen.append(messages)
+        if self._error:
+            raise self._error
+        turn = self._turns[min(self.calls, len(self._turns) - 1)]
+        self.calls += 1
+        return turn, LLMUsage(model="stub", total_tokens=500, latency_ms=100)
+
+    def tool_output(self, index: int = 0) -> str:
+        """What the last round handed back to the model."""
+        outputs = [m["content"] for m in self.messages_seen[-1] if m.get("role") == "tool"]
+        return outputs[index] if outputs else ""
+
+
+@pytest.fixture
+def llm(monkeypatch: pytest.MonkeyPatch):
+    def install(*turns: dict[str, Any], error: Exception | None = None) -> ScriptedLLM:
+        stub = ScriptedLLM(*turns, error=error)
+        monkeypatch.setattr("app.agent.assistant.llm_client", stub)
+        monkeypatch.setattr("app.api.v1.agent.llm_client", stub)
+        return stub
+
+    return install
+
+
+def days_ago(days: int) -> str:
+    return (datetime.now(UTC) - timedelta(days=days)).isoformat()

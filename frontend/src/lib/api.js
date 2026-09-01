@@ -137,7 +137,9 @@ export const api = {
   updateRule: (id, body) =>
     apiFetch(`/api/v1/follow-up-rules/${id}`, { method: 'PATCH', body }),
 
-  // chat NEVER writes — it returns a proposal. confirm performs the write.
+  // chat NEVER writes — it returns a proposal. confirm performs the write, and
+  // the body is `{kind, ...proposal.payload}`: the server picks the schema to
+  // validate against from `kind`, so the client never builds it field by field.
   agentChat: (message) => apiFetch('/api/v1/agent/chat', { method: 'POST', body: { message } }),
   agentConfirm: (body) => apiFetch('/api/v1/agent/confirm', { method: 'POST', body }),
 

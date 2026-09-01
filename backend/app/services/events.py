@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import InvalidOperationError, NotFoundError
 from app.domain.enums import STATUS_BY_EVENT, ApplicationStatus, EventSource, EventType
-from app.models.application import Application, ApplicationEvent
+from app.models.application import Application, ApplicationEvent, InterviewStage
 
 # Tolerance for client/server clock skew when rejecting future-dated events.
 FUTURE_TOLERANCE = timedelta(minutes=5)
@@ -169,8 +169,17 @@ async def reload_application(
     touching it afterwards in async context raises MissingGreenlet. Expiring and
     re-selecting lets the ``selectin`` loaders run again and pick up the row just
     written.
+
+    Only the application family is expired, not the whole identity map.
+    ``session.expire_all()`` also expired the authenticated ``User`` that the
+    request dependency is holding, so any route that read ``user.id`` *after*
+    creating something got MissingGreenlet from a lazy reload — a crash that
+    depended entirely on statement order, and stayed hidden for as long as no
+    route happened to touch the user afterwards.
     """
-    session.expire_all()
+    for instance in list(session.identity_map.values()):
+        if isinstance(instance, Application | ApplicationEvent | InterviewStage):
+            session.expire(instance)
     return await get_application(session, application_id, user_id)
 
 

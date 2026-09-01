@@ -11,64 +11,13 @@ where the loop resolves it — patching the endpoint's import instead would let
 the tests silently reach the real API.
 """
 
-import json
-from typing import Any
-
-import pytest
 from httpx import AsyncClient
 from sqlalchemy import text
 
-from app.agent.llm_client import LLMError, LLMUsage
+from app.agent.llm_client import LLMError
 from app.db.session import open_user_session
+from tests.conftest import calls, says
 from tests.factories import Session
-
-
-def says(content: str) -> dict[str, Any]:
-    return {"role": "assistant", "content": content}
-
-
-def calls(name: str, **arguments: Any) -> dict[str, Any]:
-    return {
-        "role": "assistant",
-        "content": None,
-        "tool_calls": [
-            {
-                "id": f"call_{name}",
-                "type": "function",
-                "function": {"name": name, "arguments": json.dumps(arguments)},
-            }
-        ],
-    }
-
-
-class ScriptedLLM:
-    """Returns each scripted turn in order."""
-
-    def __init__(self, *turns: dict[str, Any], error: Exception | None = None) -> None:
-        self._turns = list(turns) or [says("Nothing to do.")]
-        self._error = error
-        self.calls = 0
-        self.is_configured = True
-        self.messages_seen: list[list[dict[str, Any]]] = []
-
-    async def chat(self, *, messages: list[dict[str, Any]], **_: Any):
-        self.messages_seen.append(messages)
-        if self._error:
-            raise self._error
-        turn = self._turns[min(self.calls, len(self._turns) - 1)]
-        self.calls += 1
-        return turn, LLMUsage(model="stub", total_tokens=500, latency_ms=100)
-
-
-@pytest.fixture
-def llm(monkeypatch: pytest.MonkeyPatch):
-    def install(*turns: dict[str, Any], error: Exception | None = None) -> ScriptedLLM:
-        stub = ScriptedLLM(*turns, error=error)
-        monkeypatch.setattr("app.agent.assistant.llm_client", stub)
-        monkeypatch.setattr("app.api.v1.agent.llm_client", stub)
-        return stub
-
-    return install
 
 
 async def event_count(user: Session) -> int:
@@ -233,7 +182,7 @@ async def test_the_loop_terminates_on_a_model_that_never_answers(client: AsyncCl
 
     body = (await user.post("/api/v1/agent/chat", {"message": "hello"})).json()
 
-    assert stub.calls <= 4
+    assert stub.calls <= 6
     assert "could not work that out" in body["message"].lower()
 
 
@@ -252,8 +201,7 @@ async def test_confirming_appends_an_attributable_event(client: AsyncClient, llm
         "pending_action"
     ]
     confirmed = await user.post(
-        "/api/v1/agent/confirm",
-        {"application_id": action["application_id"], "event_type": action["event_type"]},
+        "/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]}
     )
 
     body = confirmed.json()
@@ -273,7 +221,7 @@ async def test_confirming_another_users_application_is_refused(client: AsyncClie
 
     response = await bob.post(
         "/api/v1/agent/confirm",
-        {"application_id": application["id"], "event_type": "rejected"},
+        {"kind": "append_event", "application_id": application["id"], "event_type": "rejected"},
     )
 
     assert response.status_code == 404

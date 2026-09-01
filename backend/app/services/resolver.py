@@ -68,9 +68,24 @@ class Resolution:
         return self.candidates[0] if self.is_confident else None
 
     def describe(self) -> str:
-        """What the agent says when it cannot proceed alone."""
+        """What the agent says when it cannot proceed alone.
+
+        A single weak candidate is not ambiguity, and saying "matches more than
+        one application" above a list of exactly one reads as a bug. The two
+        cases need different questions: one asks "did you mean this?", the other
+        asks "which of these?".
+        """
         if not self.candidates:
             return f"Nothing matches {self.query!r}."
+
+        if len(self.candidates) == 1:
+            only = self.candidates[0]
+            return (
+                f"{self.query!r} probably means {only.label}, but not closely enough "
+                f"to act on — matched on {only.matched_on}. Ask them to confirm that "
+                "is the one, and mention its status if it looks closed."
+            )
+
         lines = [f"{self.query!r} matches more than one application:"]
         lines.extend(f"  {i}. {c.label}" for i, c in enumerate(self.candidates, start=1))
         lines.append("Say which one you mean.")
@@ -140,10 +155,17 @@ def score_candidate(query: str, company: str, title: str, is_active: bool) -> tu
             score, basis = round(0.35 + 0.3 * closeness, 3), "approximate spelling"
 
     # A closed application is rarely what someone means by "the Amazon one",
-    # but it is not impossible — they may be correcting a mistaken rejection.
-    # Demoted rather than excluded.
+    # but it is not impossible — they may be correcting a mistaken rejection, or
+    # asking why it ended. Demoted rather than excluded.
+    #
+    # The factor is tuned, not arbitrary. At 0.7 an exact company match on a
+    # closed application scored 0.665, below CONFIDENT, so a user whose only
+    # Amazon application was rejected got "which one do you mean?" followed by a
+    # list of one — a dead end. At 0.8 it clears the threshold alone (0.76) while
+    # an active application still beats it outright (0.95 - 0.76 = 0.19, wider
+    # than AMBIGUOUS_MARGIN), which is the behaviour wanted in both cases.
     if not is_active:
-        score *= 0.7
+        score *= 0.8
         basis += " (closed)"
 
     return round(min(score, 1.0), 3), basis

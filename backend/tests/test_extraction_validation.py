@@ -226,11 +226,14 @@ def test_generated_schemas_contain_no_refs() -> None:
     """
     import json
 
-    from app.schemas.agent import AgentReply
     from app.schemas.extraction import ExtractedJob, to_strict_json_schema
     from app.schemas.matching import RubricJudgment
 
-    for model in (ExtractedJob, AgentReply, RubricJudgment):
+    # The assistant's reply schema used to be checked here too. It went away
+    # with the structured-output design — the agent uses tool calling now, whose
+    # arguments Groq validates against the tool schemas rather than this
+    # transform. Extraction and the rubric are the remaining strict callers.
+    for model in (ExtractedJob, RubricJudgment):
         rendered = json.dumps(to_strict_json_schema(model))
         assert "$ref" not in rendered, f"{model.__name__} still contains a $ref"
         assert "$defs" not in rendered, f"{model.__name__} still contains $defs"
@@ -238,8 +241,8 @@ def test_generated_schemas_contain_no_refs() -> None:
 
 def test_every_object_in_a_schema_is_closed_and_fully_required() -> None:
     """Strict mode demands both, on nested objects as well as the root."""
-    from app.schemas.agent import AgentReply
     from app.schemas.extraction import ExtractedJob, to_strict_json_schema
+    from app.schemas.matching import RubricJudgment
 
     def walk(node: object) -> None:
         if isinstance(node, dict):
@@ -253,4 +256,4 @@ def test_every_object_in_a_schema_is_closed_and_fully_required() -> None:
                 walk(item)
 
     walk(to_strict_json_schema(ExtractedJob))
-    walk(to_strict_json_schema(AgentReply))
+    walk(to_strict_json_schema(RubricJudgment))

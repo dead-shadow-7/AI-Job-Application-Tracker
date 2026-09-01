@@ -1,4 +1,3 @@
-from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
 
@@ -8,40 +7,25 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DbSession
 from app.core.exceptions import NotFoundError
 from app.domain.enums import ApplicationStatus, EventSource, Priority, WorkMode
-from app.models.application import Application, InterviewStage
+from app.models.application import InterviewStage
 from app.schemas.application import (
     ApplicationCreate,
     ApplicationPage,
     ApplicationRead,
     ApplicationStats,
-    ApplicationSummary,
     ApplicationUpdate,
     EventCreate,
     EventRead,
     InterviewStageCreate,
     InterviewStageRead,
     InterviewStageUpdate,
+    detail,
+    summarize,
 )
 from app.services.applications import create_application, get_stats, list_applications
 from app.services.events import append_event, get_application, reload_application
 
 router = APIRouter(prefix="/applications", tags=["applications"])
-
-
-def _idle_days(application: Application) -> int:
-    return max((datetime.now(UTC) - application.last_activity_at).days, 0)
-
-
-def _summarize(application: Application) -> ApplicationSummary:
-    summary = ApplicationSummary.model_validate(application)
-    summary.days_since_activity = _idle_days(application)
-    return summary
-
-
-def _detail(application: Application) -> ApplicationRead:
-    detail = ApplicationRead.model_validate(application)
-    detail.days_since_activity = _idle_days(application)
-    return detail
 
 
 @router.get("", response_model=ApplicationPage, summary="List and filter applications")
@@ -72,7 +56,7 @@ async def list_all(
         offset=offset,
     )
     return ApplicationPage(
-        items=[_summarize(r) for r in rows], total=total, limit=limit, offset=offset
+        items=[summarize(r) for r in rows], total=total, limit=limit, offset=offset
     )
 
 
@@ -100,12 +84,12 @@ async def create(
         initial_event=payload.initial_event,
         occurred_at=payload.occurred_at,
     )
-    return _detail(application)
+    return detail(application)
 
 
 @router.get("/{application_id}", response_model=ApplicationRead, summary="One application")
 async def read_one(application_id: UUID, user: CurrentUser, session: DbSession) -> ApplicationRead:
-    return _detail(await get_application(session, application_id, user.id))
+    return detail(await get_application(session, application_id, user.id))
 
 
 @router.patch("/{application_id}", response_model=ApplicationRead, summary="Edit priority or notes")
@@ -117,7 +101,7 @@ async def update(
         setattr(application, field, value.value if hasattr(value, "value") else value)
     await session.flush()
     await session.refresh(application)
-    return _detail(application)
+    return detail(application)
 
 
 @router.delete("/{application_id}", status_code=status.HTTP_204_NO_CONTENT, summary="Stop tracking")
@@ -166,7 +150,7 @@ async def add_event(
         note=payload.note,
         payload=payload.payload,
     )
-    return _detail(await reload_application(session, application_id, user.id))
+    return detail(await reload_application(session, application_id, user.id))
 
 
 # --- Interview stages -------------------------------------------------------

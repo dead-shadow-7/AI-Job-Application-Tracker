@@ -1,5 +1,5 @@
-from datetime import datetime
-from typing import Any
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,6 +13,9 @@ from app.domain.enums import (
     StageOutcome,
 )
 from app.schemas.job import JobCreate, JobRead, JobSummary
+
+if TYPE_CHECKING:  # the presenters below read attributes only; no runtime import
+    from app.models.application import Application
 
 
 class EventRead(BaseModel):
@@ -134,6 +137,29 @@ class ApplicationRead(BaseModel):
     # one place stops the dashboard and the detail page from disagreeing, and
     # keeps the client from doing clock arithmetic during render.
     days_since_activity: int = 0
+
+
+def idle_days(application: "Application") -> int:
+    return max((datetime.now(UTC) - application.last_activity_at).days, 0)
+
+
+def summarize(application: "Application") -> ApplicationSummary:
+    summary = ApplicationSummary.model_validate(application)
+    summary.days_since_activity = idle_days(application)
+    return summary
+
+
+def detail(application: "Application") -> ApplicationRead:
+    """Build the detail response, including the derived idle count.
+
+    Here rather than in a router because more than one router returns this
+    shape, and `days_since_activity` defaults to 0 — so an endpoint that
+    forgets to fill it does not fail, it silently reports every application as
+    active today. The assistant's confirm endpoint did exactly that.
+    """
+    read = ApplicationRead.model_validate(application)
+    read.days_since_activity = idle_days(application)
+    return read
 
 
 class ApplicationPage(BaseModel):
