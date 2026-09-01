@@ -257,6 +257,14 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         ["query"],
     ),
     _tool(
+        "propose_delete",
+        "Propose permanently deleting an application and its whole history. Does NOT apply "
+        "it. Irreversible, unlike everything else you can propose — offer to log 'withdrawn' "
+        "instead, which keeps the history and takes it off the active list.",
+        {"query": _QUERY},
+        ["query"],
+    ),
+    _tool(
         "propose_interview_round",
         "Propose scheduling an interview round. Does NOT apply it. This is the one place a "
         "future date belongs.",
@@ -479,6 +487,7 @@ _PROPOSERS: dict[str, Proposer] = {
     "propose_new_application": proposals.propose_new_application,
     "propose_update": proposals.propose_update,
     "propose_interview_round": proposals.propose_stage,
+    "propose_delete": proposals.propose_delete,
 }
 
 # Cheap insurance against a schema and its handler drifting apart — a tool the

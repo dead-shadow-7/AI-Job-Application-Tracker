@@ -47,19 +47,22 @@ export function AgentChat({ open, onClose }) {
     // The payload is echoed back untouched. The server re-validates it against
     // a typed schema per kind, so nothing here needs to know what is inside.
     mutationFn: (action) => api.agentConfirm({ kind: action.kind, ...action.payload }),
-    onSuccess: (application, action) => {
+    onSuccess: (result, action) => {
       for (const key of [
         ['applications'],
-        ['application', application.id],
+        ['application', result.application?.id],
         ['needs-attention'],
         ['stats'],
         ['analytics'],
       ]) {
         queryClient.invalidateQueries({ queryKey: key })
       }
+      // The server reports what it did rather than the card restating what it
+      // was going to do — a deletion that hit a constraint should not leave the
+      // transcript claiming success.
       setTurns((t) => [
         ...t.map((turn) => (turn.action === action ? { ...turn, action: null, done: true } : turn)),
-        { role: 'agent', text: `Done — ${action.summary.toLowerCase()}.` },
+        { role: 'agent', text: `Done — ${result.summary}.` },
       ])
     },
     onError: (error) =>
@@ -127,13 +130,34 @@ export function AgentChat({ open, onClose }) {
             )}
 
             {turn.action && (
-              <div className="mt-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-left">
-                <p className="text-xs font-medium text-amber-900">Confirm this change</p>
+              <div
+                className={`mt-2 rounded-lg border p-3 text-left ${
+                  turn.action.destructive
+                    ? 'border-rose-300 bg-rose-50'
+                    : 'border-amber-300 bg-amber-50'
+                }`}
+              >
+                {/* Destructive actions read differently on purpose. Everything
+                    else the assistant does is undone by appending a correcting
+                    event; a deletion is not, and a card that looks identical
+                    trains you to click through it at the same speed. */}
+                <p
+                  className={`text-xs font-medium ${
+                    turn.action.destructive ? 'text-rose-900' : 'text-amber-900'
+                  }`}
+                >
+                  {turn.action.destructive ? 'This cannot be undone' : 'Confirm this change'}
+                </p>
                 <p className="mt-1 text-sm font-medium">{turn.action.summary}</p>
 
                 <ul className="mt-1.5 space-y-0.5">
                   {turn.action.details.map((line) => (
-                    <li key={line} className="text-xs text-amber-900">
+                    <li
+                      key={line}
+                      className={`text-xs ${
+                        turn.action.destructive ? 'text-rose-900' : 'text-amber-900'
+                      }`}
+                    >
                       {line}
                     </li>
                   ))}
@@ -143,7 +167,11 @@ export function AgentChat({ open, onClose }) {
                     nothing to have resolved, and showing "100% confidence"
                     there would imply a check that never happened. */}
                 {turn.action.confidence != null && (
-                  <p className="mt-1.5 text-xs text-amber-800">
+                  <p
+                    className={`mt-1.5 text-xs ${
+                      turn.action.destructive ? 'text-rose-800' : 'text-amber-800'
+                    }`}
+                  >
                     Matched on {turn.action.matched_on} ·{' '}
                     {Math.round(turn.action.confidence * 100)}% confidence
                   </p>
@@ -154,9 +182,17 @@ export function AgentChat({ open, onClose }) {
                     type="button"
                     disabled={confirm.isPending}
                     onClick={() => confirm.mutate(turn.action)}
-                    className="rounded-lg bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:bg-accent-hover disabled:opacity-60"
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium text-white transition disabled:opacity-60 ${
+                      turn.action.destructive
+                        ? 'bg-rose-600 hover:bg-rose-700'
+                        : 'bg-accent hover:bg-accent-hover'
+                    }`}
                   >
-                    {confirm.isPending ? 'Applying…' : 'Confirm'}
+                    {confirm.isPending
+                      ? 'Applying…'
+                      : turn.action.destructive
+                        ? 'Delete permanently'
+                        : 'Confirm'}
                   </button>
                   <button
                     type="button"

@@ -15,9 +15,10 @@ from datetime import datetime
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 from app.domain.enums import EventType, InterviewStageType, Priority, WorkMode
+from app.schemas.application import ApplicationRead
 
 
 class ChatRequest(BaseModel):
@@ -29,7 +30,13 @@ ActionKind = Literal[
     "create_application",
     "update_application",
     "schedule_interview",
+    "delete_application",
 ]
+
+# The one action that cannot be undone by appending a correcting event, which
+# is how every other agent write is reversed. Flagged so the UI can style the
+# card as destructive rather than leaving it to look like any other change.
+DESTRUCTIVE: frozenset[str] = frozenset({"delete_application"})
 
 
 class ActionPreview(BaseModel):
@@ -52,6 +59,18 @@ class ActionPreview(BaseModel):
         default_factory=list, description="Every field that would be written, one per line."
     )
     payload: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def is_destructive(self) -> bool:
+        return self.kind in DESTRUCTIVE
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def destructive(self) -> bool:
+        """Serialised so the client does not have to keep its own copy of which
+        kinds are irreversible — a list that would silently fall out of date the
+        next time one is added."""
+        return self.is_destructive
 
     # Present when the action targets an application that already exists. A
     # creation has nothing to resolve, so these stay null — the card falls back
@@ -146,7 +165,39 @@ class ConfirmScheduleInterview(BaseModel):
     notes: str | None = Field(default=None, max_length=4000)
 
 
+class ConfirmDeleteApplication(BaseModel):
+    """Remove an application and its whole history.
+
+    The only agent action that is not reversible. Every other write is an event
+    appended to a log, undone by appending a correction; this destroys the log.
+    It exists because the alternative was worse — the assistant could create an
+    application but not remove one, so its own mistake had to be cleaned up by
+    hand. The proposal says how many events go with it, and offers `withdrawn`
+    as the reversible alternative.
+    """
+
+    kind: Literal["delete_application"]
+    application_id: UUID
+
+
 ConfirmRequest = Annotated[
-    ConfirmEvent | ConfirmCreateApplication | ConfirmUpdateApplication | ConfirmScheduleInterview,
+    ConfirmEvent
+    | ConfirmCreateApplication
+    | ConfirmUpdateApplication
+    | ConfirmScheduleInterview
+    | ConfirmDeleteApplication,
     Field(discriminator="kind"),
 ]
+
+
+class ConfirmResult(BaseModel):
+    """What the confirmed action did.
+
+    An envelope rather than the application itself, because a deletion has no
+    application to return and handing back the row that no longer exists would
+    be a lie the client has no way to detect.
+    """
+
+    kind: ActionKind
+    summary: str = Field(description="Past tense: what was done.")
+    application: ApplicationRead | None = None

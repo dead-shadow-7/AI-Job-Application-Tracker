@@ -49,10 +49,10 @@ async def test_it_can_propose_tracking_a_job_it_was_told_about(client: AsyncClie
         "/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]}
     )
 
-    assert created.status_code == 201
-    assert created.json()["job"]["company"]["name"] == "Zerodha"
-    assert created.json()["current_status"] == "applied"
-    assert created.json()["days_since_activity"] == 3, "backdated, not stamped now"
+    assert created.status_code == 200, created.text
+    assert created.json()["application"]["job"]["company"]["name"] == "Zerodha"
+    assert created.json()["application"]["current_status"] == "applied"
+    assert created.json()["application"]["days_since_activity"] == 3, "backdated, not stamped now"
 
 
 async def test_a_creation_card_lists_every_field_it_would_write(client: AsyncClient, llm) -> None:
@@ -165,7 +165,7 @@ async def test_updating_priority_takes_effect_only_on_confirmation(
 
     updated = (
         await user.post("/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]})
-    ).json()
+    ).json()["application"]
 
     assert updated["priority"] == "high"
     assert updated["notes"] == "Chase this one"
@@ -193,7 +193,7 @@ async def test_a_scheduled_round_holds_the_future_date_but_the_event_does_not(
     ).json()["pending_action"]
     body = (
         await user.post("/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]})
-    ).json()
+    ).json()["application"]
 
     now = datetime.now(UTC)
     stage = body["stages"][0]
@@ -227,9 +227,9 @@ async def test_round_numbers_continue_from_what_is_already_there(client: AsyncCl
         response = await user.post(
             "/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]}
         )
-        assert response.status_code == 201, response.text
+        assert response.status_code == 200, response.text
 
-    assert [s["round_number"] for s in response.json()["stages"]] == [1, 2]
+    assert [s["round_number"] for s in response.json()["application"]["stages"]] == [1, 2]
 
 
 # --- One proposal per turn -------------------------------------------------
@@ -253,6 +253,119 @@ async def test_only_the_first_proposal_of_a_turn_survives(client: AsyncClient, l
     ).json()["pending_action"]
 
     assert action["kind"] == "append_event"
+
+
+# --- Deleting --------------------------------------------------------------
+
+
+async def test_deleting_is_proposed_with_what_would_be_lost(client: AsyncClient, llm) -> None:
+    """The only irreversible action, so the card has to be specific about the
+    cost rather than asking for a generic confirmation."""
+    stub = llm(calls("propose_delete", query="Amazon"), says("This cannot be undone."))
+    user = await Session(client).start()
+    application = await user.create_application(company_name="Amazon", initial_event="applied")
+    await user.add_event(application["id"], "recruiter_reply")
+
+    action = (await user.post("/api/v1/agent/chat", {"message": "delete the Amazon one"})).json()[
+        "pending_action"
+    ]
+
+    assert action["kind"] == "delete_application"
+    assert action["destructive"] is True, "the UI styles the card from this"
+    shown = " ".join(action["details"])
+    assert "2 events" in shown, "say how much history goes with it"
+    assert "cannot be undone" in shown
+    # And the model is told to offer the reversible option first.
+    assert "withdrawn" in stub.tool_output()
+
+
+async def test_a_confirmed_delete_removes_the_application(client: AsyncClient, llm) -> None:
+    llm(calls("propose_delete", query="Amazon"), says("Confirm to delete it."))
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon", initial_event="applied")
+
+    action = (await user.post("/api/v1/agent/chat", {"message": "delete Amazon"})).json()[
+        "pending_action"
+    ]
+    assert (await user.get("/api/v1/applications")).json()["total"] == 1, "/chat must not delete"
+
+    result = (
+        await user.post("/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]})
+    ).json()
+
+    assert result["application"] is None, "there is no row left to return"
+    assert "permanently deleted" in result["summary"]
+    assert (await user.get("/api/v1/applications")).json()["total"] == 0
+
+
+async def test_deleting_another_users_application_is_refused(client: AsyncClient, llm) -> None:
+    """/confirm takes a raw id. For the one irreversible action, trusting that
+    the id came from a legitimate proposal would be the worst place to start."""
+    llm(says("ok"))
+    alice = await Session(client, "alice@example.com").start()
+    bob = await Session(client, "bob@example.com").start()
+    application = await alice.create_application(company_name="Amazon")
+
+    response = await bob.post(
+        "/api/v1/agent/confirm",
+        {"kind": "delete_application", "application_id": application["id"]},
+    )
+
+    assert response.status_code == 404
+    assert (await alice.get("/api/v1/applications")).json()["total"] == 1
+
+
+# --- Knowing what it did ---------------------------------------------------
+
+
+async def test_a_confirmed_action_enters_the_conversation(client: AsyncClient, llm) -> None:
+    """The bug this exists for: confirmation happens on a different endpoint, so
+    the transcript ended at "I'm about to record…" and the assistant answered
+    the next question as though nothing had happened — "I haven't created that
+    yet, so there's nothing to delete", about a row sitting in the table."""
+    stub = llm(
+        calls("propose_new_application", company_name="Zerodha", title="SDE"),
+        says("Confirm and I will add it."),
+        says("It is already tracked."),
+    )
+    user = await Session(client).start()
+
+    action = (
+        await user.post("/api/v1/agent/chat", {"message": "add the Zerodha SDE role"})
+    ).json()["pending_action"]
+    await user.post("/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]})
+    await user.post("/api/v1/agent/chat", {"message": "actually delete it"})
+
+    replayed = " ".join(
+        str(m.get("content")) for m in stub.messages_seen[-1] if m.get("role") == "assistant"
+    )
+    assert "started tracking SDE at Zerodha" in replayed
+    assert "no longer pending" in replayed
+
+
+async def test_the_thread_stays_in_order(client: AsyncClient, llm) -> None:
+    """Postgres now() is the transaction start time, so a question and its
+    answer — written in one request — shared a timestamp and the history query
+    could return them either way round. A model shown its own reply before the
+    message that prompted it answers the wrong question."""
+    stub = llm(says("Which application?"), says("Amazon."), says("Anything else?"))
+    user = await Session(client).start()
+
+    for message in ("first question", "second question", "third question"):
+        await user.post("/api/v1/agent/chat", {"message": message})
+
+    thread = [
+        (m["role"], m["content"])
+        for m in stub.messages_seen[-1]
+        if m.get("role") in {"user", "assistant"}
+    ]
+    assert thread == [
+        ("user", "first question"),
+        ("assistant", "Which application?"),
+        ("user", "second question"),
+        ("assistant", "Amazon."),
+        ("user", "third question"),
+    ]
 
 
 # --- Analysis --------------------------------------------------------------

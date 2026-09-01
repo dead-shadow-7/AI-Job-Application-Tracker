@@ -19,31 +19,33 @@ reversible by appending a correction.
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
+from uuid import UUID
 
-from fastapi import APIRouter, Body, status
+from fastapi import APIRouter, Body
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.assistant import run_assistant
+from app.agent.assistant import run_assistant, save_turn
 from app.agent.llm_client import LLMError, llm_client
 from app.agent.prompts.assistant import ASSISTANT_PROMPT_VERSION
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import settings
 from app.core.exceptions import InvalidOperationError
-from app.domain.enums import EventSource, EventType
+from app.domain.enums import EventSource, EventType, MessageRole
 from app.models.application import Application, InterviewStage
-from app.models.user import User
 from app.schemas.agent import (
     ActionPreview,
     ChatRequest,
     ChatResponse,
     ConfirmCreateApplication,
+    ConfirmDeleteApplication,
     ConfirmEvent,
     ConfirmRequest,
+    ConfirmResult,
     ConfirmScheduleInterview,
     ConfirmUpdateApplication,
 )
-from app.schemas.application import ApplicationRead, detail
+from app.schemas.application import detail
 from app.schemas.job import JobCreate
 from app.services.applications import create_application
 from app.services.events import append_event, get_application, reload_application
@@ -85,36 +87,60 @@ async def chat(payload: ChatRequest, user: CurrentUser, session: DbSession) -> C
     )
 
 
-@router.post(
-    "/confirm",
-    response_model=ApplicationRead,
-    status_code=status.HTTP_201_CREATED,
-    summary="Carry out a proposed action",
-)
+@router.post("/confirm", response_model=ConfirmResult, summary="Carry out a proposed action")
 async def confirm(
     payload: Annotated[ConfirmRequest, Body()], user: CurrentUser, session: DbSession
-) -> ApplicationRead:
-    """Perform the confirmed change and return the application it landed on.
+) -> ConfirmResult:
+    """Perform the confirmed change and say what it did.
 
     Existing applications are named by id, not by the original phrase:
     re-resolving now could land somewhere different if the data changed in
     between, and the user confirmed one specific row.
+
+    The outcome is written into the conversation before returning. Without that
+    the assistant never learns its proposal was accepted: confirmation happens
+    on a different endpoint, so the transcript still ended at "I'm about to
+    record…" and the next question got answered as though nothing had happened —
+    "I haven't created that yet, so there's nothing to delete", about a row
+    sitting in the table.
     """
     # Read off the ORM object before anything writes. Appending an event expires
     # application rows in the identity map, and a `user` that has to reload
     # itself mid-request cannot do so lazily in async context.
     user_id = user.id
 
-    if isinstance(payload, ConfirmCreateApplication):
-        application = await _create(session, user, payload)
-    elif isinstance(payload, ConfirmEvent):
-        application = await _append(session, user, payload)
-    elif isinstance(payload, ConfirmUpdateApplication):
-        application = await _update(session, user, payload)
+    if isinstance(payload, ConfirmDeleteApplication):
+        result = ConfirmResult(kind=payload.kind, summary=await _delete(session, user_id, payload))
     else:
-        application = await _schedule(session, user, payload)
+        if isinstance(payload, ConfirmCreateApplication):
+            application = await _create(session, user_id, payload)
+            summary = f"started tracking {payload.title} at {payload.company_name}"
+        elif isinstance(payload, ConfirmEvent):
+            application = await _append(session, user_id, payload)
+            summary = f"logged {payload.event_type.value}"
+        elif isinstance(payload, ConfirmUpdateApplication):
+            application = await _update(session, user_id, payload)
+            summary = "updated"
+        else:
+            application = await _schedule(session, user_id, payload)
+            summary = f"scheduled a {payload.stage_type.value} round"
 
-    return detail(await reload_application(session, application.id, user_id))
+        read = detail(await reload_application(session, application.id, user_id))
+        result = ConfirmResult(
+            kind=payload.kind,
+            summary=f"{summary} on {read.job.title} at {read.job.company.name}"
+            if not isinstance(payload, ConfirmCreateApplication)
+            else summary,
+            application=read,
+        )
+
+    await save_turn(
+        session,
+        user_id,
+        MessageRole.ASSISTANT,
+        f"Done — I {result.summary}. That is saved; it is no longer pending.",
+    )
+    return result
 
 
 def _backdated(days: int) -> datetime | None:
@@ -123,8 +149,8 @@ def _backdated(days: int) -> datetime | None:
     return None if days <= 0 else datetime.now(UTC) - timedelta(days=days)
 
 
-async def _append(session: AsyncSession, user: User, payload: ConfirmEvent) -> Application:
-    application = await get_application(session, payload.application_id, user.id)
+async def _append(session: AsyncSession, user_id: UUID, payload: ConfirmEvent) -> Application:
+    application = await get_application(session, payload.application_id, user_id)
     await append_event(
         session,
         application=application,
@@ -137,7 +163,7 @@ async def _append(session: AsyncSession, user: User, payload: ConfirmEvent) -> A
 
 
 async def _create(
-    session: AsyncSession, user: User, payload: ConfirmCreateApplication
+    session: AsyncSession, user_id: UUID, payload: ConfirmCreateApplication
 ) -> Application:
     """Track a job described in conversation.
 
@@ -148,7 +174,7 @@ async def _create(
     """
     return await create_application(
         session,
-        user_id=user.id,
+        user_id=user_id,
         job_id=None,
         job_payload=JobCreate(
             company_name=payload.company_name,
@@ -166,9 +192,9 @@ async def _create(
 
 
 async def _update(
-    session: AsyncSession, user: User, payload: ConfirmUpdateApplication
+    session: AsyncSession, user_id: UUID, payload: ConfirmUpdateApplication
 ) -> Application:
-    application = await get_application(session, payload.application_id, user.id)
+    application = await get_application(session, payload.application_id, user_id)
     if payload.priority is not None:
         application.priority = payload.priority.value
     if payload.notes is not None:
@@ -178,7 +204,7 @@ async def _update(
 
 
 async def _schedule(
-    session: AsyncSession, user: User, payload: ConfirmScheduleInterview
+    session: AsyncSession, user_id: UUID, payload: ConfirmScheduleInterview
 ) -> Application:
     """Add the round and record that scheduling happened.
 
@@ -186,7 +212,7 @@ async def _schedule(
     in the future would push `last_activity_at` forward and make a stalled
     application look fresh, silently disabling the follow-up detection.
     """
-    application = await get_application(session, payload.application_id, user.id)
+    application = await get_application(session, payload.application_id, user_id)
 
     round_number = payload.round_number
     if round_number is None:
@@ -202,7 +228,7 @@ async def _schedule(
     session.add(
         InterviewStage(
             application_id=application.id,
-            user_id=user.id,
+            user_id=user_id,
             round_number=round_number,
             stage_type=payload.stage_type.value,
             scheduled_at=datetime.now(UTC) + timedelta(days=payload.in_days),
@@ -220,3 +246,18 @@ async def _schedule(
         note=payload.notes,
     )
     return application
+
+
+async def _delete(session: AsyncSession, user_id: UUID, payload: ConfirmDeleteApplication) -> str:
+    """Remove an application and everything hanging off it.
+
+    Returns the label rather than the row, because after this there is no row.
+    Ownership is re-checked here and not taken from the proposal: `/confirm`
+    accepts a raw id, and an id that arrived through the client is not proof of
+    anything.
+    """
+    application = await get_application(session, payload.application_id, user_id)
+    label = f"{application.job.title} at {application.job.company.name}"
+    await session.delete(application)
+    await session.flush()
+    return f"permanently deleted {label} and its history"

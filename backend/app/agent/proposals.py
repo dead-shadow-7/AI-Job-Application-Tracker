@@ -23,10 +23,12 @@ import uuid
 from difflib import SequenceMatcher
 from typing import Any
 
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.resolving import resolve_one
 from app.domain.enums import EventType, InterviewStageType, Priority, WorkMode
+from app.models.application import ApplicationEvent
 from app.services.resolver import Candidate, resolve_application
 
 
@@ -254,6 +256,56 @@ async def propose_stage(
                 "interviewer": interviewer,
                 "notes": arguments.get("notes"),
             },
+        ),
+    )
+
+
+async def propose_delete(
+    session: AsyncSession, user_id: uuid.UUID, arguments: dict[str, Any]
+) -> tuple[str, dict[str, Any] | None]:
+    """Remove an application and its history.
+
+    The only proposal here that cannot be undone. Everything else the agent
+    writes is an event appended to a log, corrected by appending another; this
+    destroys the log. It exists because not having it was worse — the assistant
+    could add an application but not take one back, so its own mistake became
+    the user's manual cleanup.
+
+    The card says how much history goes with it, and the model is told to offer
+    `withdrawn` first: someone who has decided against a role usually wants that
+    recorded, not erased.
+    """
+    query = arguments.get("query", "")
+    candidate, problem = await resolve_one(session, user_id, query)
+    if candidate is None:
+        return problem or "No such application.", None
+
+    application = candidate.application
+    events = (
+        await session.execute(
+            select(func.count())
+            .select_from(ApplicationEvent)
+            .where(ApplicationEvent.application_id == application.id)
+        )
+    ).scalar_one()
+
+    details = [
+        f"Deletes: {candidate.label}",
+        f"Also deletes its timeline: {events} event{'' if events == 1 else 's'}",
+        "This cannot be undone — there is no correcting event for a deletion.",
+    ]
+
+    return (
+        f"Prepared, pending confirmation: permanently delete {candidate.label} and its "
+        f"{events} timeline events. Warn them it cannot be undone, and ask whether they "
+        "would rather log 'withdrawn' — that keeps the history and takes it off the "
+        "active list.",
+        _targeted(
+            candidate,
+            "delete_application",
+            f"Permanently delete {candidate.label}",
+            details,
+            {},
         ),
     )
 

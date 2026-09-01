@@ -204,8 +204,8 @@ async def test_confirming_appends_an_attributable_event(client: AsyncClient, llm
         "/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]}
     )
 
-    body = confirmed.json()
-    assert confirmed.status_code == 201
+    body = confirmed.json()["application"]
+    assert confirmed.status_code == 200
     assert body["current_status"] == "rejected"
     agent_events = [e for e in body["events"] if e["source"] == "agent"]
     assert len(agent_events) == 1

@@ -21,15 +21,29 @@ export class ApiError extends Error {
 export async function apiFetch(path, { method = 'GET', body, signal } = {}) {
   const token = await getAccessToken()
 
-  const response = await fetch(`${BASE_URL}${path}`, {
-    method,
-    signal,
-    headers: {
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  })
+  let response
+  try {
+    response = await fetch(`${BASE_URL}${path}`, {
+      method,
+      signal,
+      headers: {
+        ...(body ? { 'Content-Type': 'application/json' } : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      ...(body ? { body: JSON.stringify(body) } : {}),
+    })
+  } catch (cause) {
+    // fetch rejects before any response exists — the API is down, restarting,
+    // or unreachable. The browser's own wording ("NetworkError when attempting
+    // to fetch resource") reads like a bug in whatever you just clicked, which
+    // sends you looking in the wrong place entirely.
+    if (cause?.name === 'AbortError') throw cause
+    throw new ApiError(
+      `Could not reach the API at ${BASE_URL}. It may be restarting — try again in a moment.`,
+      0,
+      null,
+    )
+  }
 
   if (response.status === 401) {
     await supabase?.auth.signOut()

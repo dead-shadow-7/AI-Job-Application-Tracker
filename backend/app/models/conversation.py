@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from sqlalchemy import DateTime, ForeignKey, Index, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -30,6 +30,15 @@ class AgentMessage(UUIDPrimaryKeyMixin, Base):
 
     role: Mapped[str] = mapped_column(String(10), nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Stamped in Python, not by the server. Postgres `now()` returns the
+    # *transaction* start time, so a question and its answer — written in one
+    # request — landed on the identical timestamp, and the history query's
+    # ORDER BY could then return them either way round. A model shown its own
+    # reply before the message that prompted it answers the wrong question.
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        server_default=func.now(),
+        nullable=False,
     )
