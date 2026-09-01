@@ -12,6 +12,12 @@ export function AppShell() {
             AI Job Tracker
           </Link>
           <div className="flex items-center gap-3">
+            <Link
+              to="/resumes"
+              className="text-sm text-ink-muted transition hover:text-accent"
+            >
+              Resume
+            </Link>
             <span className="hidden text-xs text-ink-muted sm:inline">{user?.email}</span>
             <button
               type="button"

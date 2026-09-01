@@ -51,6 +51,38 @@ export async function apiFetch(path, { method = 'GET', body, signal } = {}) {
   return payload
 }
 
+/**
+ * File upload.
+ *
+ * Separate from apiFetch because a multipart body must NOT carry an explicit
+ * Content-Type — the browser has to set it itself so it can append the
+ * boundary token. Setting `application/json` here, as apiFetch does, makes the
+ * server reject the body as malformed.
+ */
+async function uploadResume(file, label) {
+  const token = await getAccessToken()
+  const form = new FormData()
+  form.append('file', file)
+  if (label) form.append('label', label)
+
+  const response = await fetch(`${BASE_URL}/api/v1/resumes`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form,
+  })
+
+  const payload = await response.json().catch(() => null)
+  if (!response.ok) {
+    const detail = payload?.detail
+    throw new ApiError(
+      Array.isArray(detail) ? detail.map((d) => d.msg).join(', ') : (detail ?? 'Upload failed'),
+      response.status,
+      payload,
+    )
+  }
+  return payload
+}
+
 /** Drops empty values so `?status=&search=` never reaches the API. */
 function query(params) {
   const search = new URLSearchParams()
@@ -86,6 +118,17 @@ export const api = {
   // Extracts and returns a preview. Writes nothing — the user reviews the
   // result and posts it to createApplication.
   ingestJob: (body) => apiFetch('/api/v1/jobs/ingest', { method: 'POST', body }),
+
+  listResumes: () => apiFetch('/api/v1/resumes'),
+  // Multipart, so this bypasses apiFetch's JSON handling — see uploadResume.
+  uploadResumeFile: (file, label) => uploadResume(file, label),
+  uploadResumeText: (body) => apiFetch('/api/v1/resumes/text', { method: 'POST', body }),
+  setDefaultResume: (id) => apiFetch(`/api/v1/resumes/${id}/default`, { method: 'POST' }),
+  deleteResume: (id) => apiFetch(`/api/v1/resumes/${id}`, { method: 'DELETE' }),
+
+  getMatch: (applicationId) => apiFetch(`/api/v1/applications/${applicationId}/match`),
+  computeMatch: (applicationId) =>
+    apiFetch(`/api/v1/applications/${applicationId}/match`, { method: 'POST' }),
 
   listSkills: (params = {}) => apiFetch(`/api/v1/skills${query(params)}`),
   listCompanies: (params = {}) => apiFetch(`/api/v1/companies${query(params)}`),

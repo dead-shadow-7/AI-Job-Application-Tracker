@@ -6,6 +6,7 @@ import { Applications } from '@/routes/Applications'
 import { Login } from '@/routes/Login'
 import { NewApplication } from '@/routes/NewApplication'
 import { PasteJob } from '@/routes/PasteJob'
+import { Resumes } from '@/routes/Resumes'
 
 export default function App() {
   return (
@@ -15,6 +16,7 @@ export default function App() {
         <Route element={<AppShell />}>
           <Route path="/" element={<Applications />} />
           <Route path="/applications/paste" element={<PasteJob />} />
+          <Route path="/resumes" element={<Resumes />} />
           <Route path="/applications/new" element={<NewApplication />} />
           <Route path="/applications/:id" element={<ApplicationDetail />} />
         </Route>

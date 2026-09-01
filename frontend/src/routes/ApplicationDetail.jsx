@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ErrorState } from '@/components/ErrorState'
+import { MatchPanel } from '@/components/MatchPanel'
 import { Spinner } from '@/components/Spinner'
 import { StatusBadge } from '@/components/StatusBadge'
 import { Timeline } from '@/components/Timeline'
@@ -210,12 +211,7 @@ export function ApplicationDetail() {
             </section>
           )}
 
-          <section className="rounded-xl border border-border-subtle bg-surface p-5">
-            <h2 className="text-sm font-medium">Match</h2>
-            <p className="mt-2 text-sm text-ink-muted">
-              Resume match scoring arrives in Phase 3.
-            </p>
-          </section>
+          <MatchPanel applicationId={id} />
 
           <button
             type="button"

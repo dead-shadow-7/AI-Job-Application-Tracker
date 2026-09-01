@@ -5,8 +5,8 @@ description; an LLM extracts a structured record, scores it against your resume,
 and an event-sourced timeline lets an agent tell you *"Setoo has been silent 7
 days since the HR screening — a follow-up is due."*
 
-**Status: Phase 2 complete.** Paste a job description and get a structured,
-validated record back for review. Resume matching lands in Phase 3.
+**Status: Phase 3 complete.** Paste a job description, get a structured record,
+and score it against your resume with a breakdown you can argue with.
 
 ## Stack
 
@@ -126,8 +126,8 @@ frontend/
 | 0 | Foundations, auth, RLS, CI | done |
 | 1 | Tracker CRUD + event timeline — replaces the sheet | done |
 | 2 | LLM ingestion and full JD extraction | done |
-| 3 | Resume match and scoring | next |
-| 4 | Agent — NL commands and follow-up detection | |
+| 3 | Resume match and scoring | done |
+| 4 | Agent — NL commands and follow-up detection | next |
 | 5 | Semantic search, dedup, analytics | |
 | 6 | Vercel + EC2 deployment | |
 
@@ -178,6 +178,36 @@ The free tier allows 8,000 tokens per minute, and `max_completion_tokens` counts
 against that budget *before* generation, so it is capped at 3,000 rather than
 left optimistic. Groq reports token exhaustion as a `413`, which reads like
 "payload too large" and is not.
+
+## Scoring is arithmetic, not vibes
+
+A match score is a weighted sum of components you can each inspect:
+
+| Component | Weight |
+| --- | --- |
+| Must-have skill coverage | 45% |
+| Nice-to-have coverage | 15% |
+| Experience fit | 15% |
+| Seniority fit | 10% |
+| LLM evidence review | **15%, capped** |
+
+The cap is the point. A confident model can shade a score but never manufacture
+one, and when the model is rate-limited the other 85% still produces a usable
+number instead of an error.
+
+This is deliberately **not** cosine similarity between a resume embedding and a
+job embedding. Those are stylistically different documents, so that number
+lands near the same value for every pair — it separates nothing and explains
+less. Measured on the real stack: a matching resume scored **89/100** against a
+backend role and **17/100** against a principal-level mobile role. Cosine
+similarity would have put both near 0.7.
+
+Vectors do what they are actually good at — retrieving which of your resume
+bullets bear on a given requirement, so the rubric judges your real words
+rather than a summary of them.
+
+Embeddings run locally via fastembed. Your resume never leaves the machine,
+which is simpler than any policy about how a vendor may use it.
 
 ## The timeline is the point
 
