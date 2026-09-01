@@ -25,6 +25,13 @@ dist/
 backend/uploads/
 backend/.models/
 
+# Database dumps. These contain resume text, email addresses and the whole
+# application history — everything the RLS policies exist to protect. Never
+# commit one, least of all to a public repository.
+backups/
+*.sql.gz
+*.dump
+
 # Editors / OS
 .vscode/
 .idea/
