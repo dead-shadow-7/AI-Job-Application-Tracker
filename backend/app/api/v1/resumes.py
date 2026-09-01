@@ -4,6 +4,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, File, Form, UploadFile, status
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.concurrency import run_in_threadpool
 
 from app.api.deps import CurrentUser, DbSession
 from app.core.exceptions import InvalidOperationError
@@ -73,7 +74,10 @@ async def upload(
     if not data:
         raise InvalidOperationError("That file is empty.")
 
-    text = extract_text(file.filename or "resume.pdf", data)
+    # pypdf and python-docx are pure CPU and this runs on a single event loop:
+    # parsing a multi-page PDF inline froze every other in-flight request for
+    # the whole parse. Embedding, just below, was already offloaded this way.
+    text = await run_in_threadpool(extract_text, file.filename or "resume.pdf", data)
 
     resume = await create_resume(
         session,

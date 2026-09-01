@@ -1,0 +1,27 @@
+# The `COPY . .` layer measured 46.5MB, of which 45MB was .mypy_cache — against
+# 564KB of actual source. Every local `mypy` run therefore invalidated the final
+# image layer and re-sent the cache as build context.
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+__pycache__/
+*.py[cod]
+
+# Local virtualenvs never belong in the image; the deps layer installs its own.
+.venv/
+venv/
+
+# Downloaded at runtime into /tmp; see services/embeddings.py.
+.models/
+
+# Secrets. The image reads configuration from the environment, and a baked .env
+# would ship credentials to anyone who pulls it.
+.env
+.env.*
+!.env.example
+
+.git/
+.gitignore
+*.egg-info/
+.coverage
+htmlcov/
