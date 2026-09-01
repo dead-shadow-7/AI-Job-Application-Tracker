@@ -155,14 +155,28 @@ async def run_assistant(
 
             result = await run_tool(name, arguments, session, user_id, message=message)
             tools_used.append(name)
-            if result.proposal is not None and not (proposal and KEEP_FIRST_PROPOSAL):
-                proposal = result.proposal
+
+            output = result.output
+            if result.proposal is not None:
+                if proposal is None:
+                    proposal = result.proposal
+                elif KEEP_FIRST_PROPOSAL:
+                    # Told to the model rather than dropped in silence. Asked to
+                    # delete two applications it prepares both, one card renders,
+                    # and it reports both as done — so one of them quietly did
+                    # not happen and the transcript says otherwise.
+                    output = (
+                        "NOT PREPARED — a change is already awaiting confirmation this turn, "
+                        "and only one can be shown at a time. Tell them you have prepared "
+                        f"the first one, and that you will do this one ({name}) next once "
+                        "they have confirmed it. Do NOT describe this one as ready."
+                    )
             # Asking twice in one turn is common when the model retries a query;
             # showing the same posting twice is not.
             if result.attachment is not None and result.attachment not in attachments:
                 attachments.append(result.attachment)
 
-            messages.append({"role": "tool", "tool_call_id": call["id"], "content": result.output})
+            messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
     else:
         logger.warning("Assistant hit the round limit for user %s", user_id)
         reply_text = (

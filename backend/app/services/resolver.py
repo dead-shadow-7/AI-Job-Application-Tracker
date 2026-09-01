@@ -42,6 +42,12 @@ class Candidate:
     score: float
     matched_on: str
 
+    # The score before closed applications are demoted. The demotion answers
+    # "which of these did they mean?", so it belongs to ranking — using it to
+    # decide "is this a match at all" conflates two different questions and
+    # makes a lone closed application unreachable by any ordinary phrase.
+    base_score: float = 0.0
+
     @property
     def label(self) -> str:
         job = self.application.job
@@ -55,13 +61,23 @@ class Resolution:
 
     @property
     def is_confident(self) -> bool:
-        """One clear winner, and nothing close behind it."""
-        if len(self.candidates) != 1:
-            if not self.candidates or self.candidates[0].score < CONFIDENT:
-                return False
-            runner_up = self.candidates[1].score
-            return self.candidates[0].score - runner_up >= AMBIGUOUS_MARGIN
-        return self.candidates[0].score >= CONFIDENT
+        """One clear winner, and nothing close behind it.
+
+        A single candidate is judged on its *undemoted* score. Withdrawing an
+        application used to make it unreachable: "the Amazon one" scores 0.80 as
+        a partial company match, the closed demotion takes it to 0.64, and the
+        assistant asks which one you mean about the only one there is. That
+        phrasing is the example in the tool schema, so the loop was reliable.
+
+        With several candidates the demoted scores are used, because there the
+        demotion is doing its actual job — keeping an open application ahead of
+        a closed one.
+        """
+        if len(self.candidates) == 1:
+            return self.candidates[0].base_score >= CONFIDENT
+        if not self.candidates or self.candidates[0].score < CONFIDENT:
+            return False
+        return self.candidates[0].score - self.candidates[1].score >= AMBIGUOUS_MARGIN
 
     @property
     def best(self) -> Candidate | None:
@@ -210,14 +226,23 @@ async def resolve_application(session: AsyncSession, user_id: uuid.UUID, query: 
     terminal = {s.value for s in TERMINAL_STATUSES}
     scored: list[Candidate] = []
     for application in rows:
+        active = application.current_status not in terminal
         score, basis = score_candidate(
-            cleaned,
-            application.job.company.name,
-            application.job.title,
-            application.current_status not in terminal,
+            cleaned, application.job.company.name, application.job.title, active
+        )
+        # Scored a second time as though it were open, so ranking and
+        # recognition can ask different questions of the same match.
+        base = (
+            score
+            if active
+            else score_candidate(
+                cleaned, application.job.company.name, application.job.title, True
+            )[0]
         )
         if score > 0:
-            scored.append(Candidate(application=application, score=score, matched_on=basis))
+            scored.append(
+                Candidate(application=application, score=score, matched_on=basis, base_score=base)
+            )
 
     scored.sort(key=lambda c: (-c.score, c.application.job.company.name))
     return Resolution(candidates=scored[:MAX_CANDIDATES], query=cleaned)

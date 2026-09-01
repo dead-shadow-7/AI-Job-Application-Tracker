@@ -489,6 +489,28 @@ async def test_round_numbers_continue_from_what_is_already_there(client: AsyncCl
 # --- One proposal per turn -------------------------------------------------
 
 
+async def test_a_dropped_second_proposal_is_reported_to_the_model(client: AsyncClient, llm) -> None:
+    """ "Delete the Amazon one and also the Setoo one" prepares two changes, one
+    card renders, and the reply claims both are ready. One of them then quietly
+    does not happen while the transcript says otherwise. The model is told."""
+    stub = llm(
+        calls_many(
+            ("propose_delete", {"query": "Setoo"}),
+            ("propose_delete", {"query": "Amazon"}),
+        ),
+        says("I have prepared the first one."),
+    )
+    user = await Session(client).start()
+    await user.create_application(company_name="Setoo", title="AI/ML Intern")
+    await user.create_application(company_name="Amazon", title="SDE")
+
+    await user.post("/api/v1/agent/chat", {"message": "delete the Setoo one and the Amazon one"})
+
+    second = stub.tool_output(1)
+    assert "NOT PREPARED" in second
+    assert "already awaiting confirmation" in second
+
+
 async def test_only_the_first_proposal_of_a_turn_survives(client: AsyncClient, llm) -> None:
     """The card renders one action, so two proposals would silently drop one.
     Keeping the first keeps it consistent with what the model went on to say."""

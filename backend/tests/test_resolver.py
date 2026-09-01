@@ -160,3 +160,40 @@ async def test_the_resolver_cannot_see_another_users_applications(
     resolution = await resolve(bob, "Amazon")
 
     assert resolution.candidates == []
+
+
+async def test_a_withdrawn_application_is_still_reachable_by_an_ordinary_phrase(client) -> None:
+    """Withdrawing something used to make it unaddressable.
+
+    "the Amazon one" scores 0.80 as a partial company match; the closed
+    demotion took it to 0.64, under the threshold, so the assistant asked which
+    one you meant about the only one there was. That phrasing is the example in
+    the tool schema, so the loop was reliable rather than occasional.
+
+    The demotion answers "which of these did you mean" — it is a ranking
+    device, and applying it to recognition asks a different question.
+    """
+    user = await Session(client).start()
+    application = await user.create_application(
+        company_name="Amazon", title="SDE", initial_event="applied"
+    )
+    await user.add_event(application["id"], "withdrawn")
+
+    for phrase in ("Amazon", "the Amazon one", "the Amazon application"):
+        resolution = await resolve(user, phrase)
+        assert resolution.best is not None, f"{phrase!r} should still resolve"
+
+
+async def test_an_open_application_still_wins_over_a_closed_one(client) -> None:
+    """The demotion has to keep doing its actual job: two roles at one company,
+    one withdrawn, must not become a coin toss."""
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon", title="Backend Engineer")
+    closed = await user.create_application(
+        company_name="Amazon", title="Data Engineer", initial_event="applied"
+    )
+    await user.add_event(closed["id"], "withdrawn")
+
+    resolution = await resolve(user, "Amazon")
+
+    assert resolution.candidates[0].application.job.title == "Backend Engineer"
