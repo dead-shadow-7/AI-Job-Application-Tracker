@@ -43,6 +43,18 @@ class LLMUsage(BaseModel):
     total_tokens: int = 0
     latency_ms: int = 0
 
+    # How much of the prompt was served from the provider's cache. Worth
+    # recording because it is most of the bill: the system prompt and tool
+    # schemas are ~3,100 tokens of identical prefix on every round, and a hit
+    # halves what they cost. Nothing here enables it — caching is automatic
+    # above 1,024 tokens — but a hit rate that quietly collapses after a prompt
+    # edit would otherwise show up only as a larger invoice.
+    cached_tokens: int = 0
+
+    @property
+    def cache_hit_rate(self) -> float:
+        return self.cached_tokens / self.prompt_tokens if self.prompt_tokens else 0.0
+
 
 class StructuredResult[TModel: BaseModel](BaseModel):
     data: TModel
@@ -169,6 +181,9 @@ class LLMClient:
                         prompt_tokens=raw.get("prompt_tokens", 0),
                         completion_tokens=raw.get("completion_tokens", 0),
                         total_tokens=raw.get("total_tokens", 0),
+                        cached_tokens=(raw.get("prompt_tokens_details") or {}).get(
+                            "cached_tokens", 0
+                        ),
                         latency_ms=int(response.elapsed.total_seconds() * 1000),
                     )
 

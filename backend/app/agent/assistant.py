@@ -61,6 +61,7 @@ class AssistantResult:
     attachments: list[dict[str, Any]] = field(default_factory=list)
     tools_used: list[str] = field(default_factory=list)
     total_tokens: int = 0
+    cached_tokens: int = 0
 
 
 async def load_history(session: AsyncSession, user_id: uuid.UUID) -> list[dict[str, str]]:
@@ -117,11 +118,22 @@ async def run_assistant(
     attachments: list[dict[str, Any]] = []
     tools_used: list[str] = []
     total_tokens = 0
+    cached_tokens = 0
     reply_text = ""
 
     for _round in range(MAX_ROUNDS):
         assistant_message, usage = await model.chat(messages=messages, tools=TOOL_SCHEMAS)
         total_tokens += usage.total_tokens
+        cached_tokens += usage.cached_tokens
+        # A prefix that stops being cached is a silent 2x on the prompt bill —
+        # it does not fail, it just costs more — so it is logged rather than
+        # left to be noticed on an invoice.
+        logger.debug(
+            "round: %d prompt tokens, %d from cache (%.0f%%)",
+            usage.prompt_tokens,
+            usage.cached_tokens,
+            usage.cache_hit_rate * 100,
+        )
 
         tool_calls = assistant_message.get("tool_calls") or []
         if not tool_calls:
@@ -168,4 +180,5 @@ async def run_assistant(
         attachments=attachments,
         tools_used=tools_used,
         total_tokens=total_tokens,
+        cached_tokens=cached_tokens,
     )
