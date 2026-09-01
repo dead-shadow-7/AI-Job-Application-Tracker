@@ -9,8 +9,12 @@ and pinned.
 """
 
 import asyncio
+import json
 import logging
 import random
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from time import perf_counter
 from typing import Any, TypeVar
 
 import httpx
@@ -103,19 +107,47 @@ class StructuredResult[TModel: BaseModel](BaseModel):
     usage: LLMUsage
 
 
-def _chat_run(outputs: Any) -> dict[str, Any]:
-    """Reshape `(message, usage)` into what LangSmith prices a run from.
+@dataclass(slots=True)
+class TextDelta:
+    """A fragment of the answer, handed over as it is generated."""
 
-    Non-dict returns arrive wrapped under "output", so the tuple is unpacked
-    from there. Written defensively: a trace that fails to render is annoying,
-    a request that fails because tracing raised is not acceptable.
+    text: str
+
+
+@dataclass(slots=True)
+class TurnComplete:
+    """The assembled turn, once the stream ends.
+
+    Deliberately the same shape a non-streamed completion returns — role,
+    content, reassembled ``tool_calls`` — so the loop reading it never has to
+    know that the message arrived in a few hundred pieces.
+    """
+
+    message: dict[str, Any]
+    usage: LLMUsage
+
+
+StreamEvent = TextDelta | TurnComplete
+
+
+def _stream_run(outputs: Any) -> dict[str, Any]:
+    """Reshape a streamed turn into what LangSmith prices a run from.
+
+    A traced async generator hands over everything it yielded, which here is a
+    long tail of text fragments followed by one assembled turn. Only the last
+    carries the message and the token counts, so the fragments are dropped
+    rather than uploaded as several hundred rows of one word each.
+
+    Written defensively, like its sibling below: a trace that fails to render
+    is annoying, a request that fails because tracing raised is not acceptable.
     """
     value = outputs.get("output") if isinstance(outputs, dict) else outputs
-    if not (isinstance(value, tuple) and len(value) == 2):
+    events = value if isinstance(value, list) else [value]
+    finished = next((e for e in reversed(events) if isinstance(e, TurnComplete)), None)
+    if finished is None:
         return outputs if isinstance(outputs, dict) else {"output": outputs}
 
-    message, usage = value
-    return as_llm_run([message], usage)
+    return as_llm_run([finished.message], finished.usage)
 
 
 def _extract_run(outputs: Any) -> dict[str, Any]:
@@ -200,9 +232,9 @@ class LLMClient:
         "chat",
         run_type="llm",
         process_inputs=hide("self", "tools"),
-        process_outputs=_chat_run,
+        process_outputs=_stream_run,
     )
-    async def chat(
+    async def stream_chat(
         self,
         *,
         messages: list[dict[str, Any]],
@@ -210,15 +242,18 @@ class LLMClient:
         model: str | None = None,
         temperature: float = 0.0,
         max_tokens: int | None = None,
-    ) -> tuple[dict[str, Any], LLMUsage]:
-        """One turn of a tool-calling conversation.
+    ) -> AsyncIterator[StreamEvent]:
+        """One turn of a tool-calling conversation, delivered as it is written.
 
-        Returns the raw assistant message so the caller can drive the loop:
-        either it carries ``tool_calls`` to execute, or it carries ``content``
-        and the loop is done. Deliberately not wrapped in a framework — the
-        loop is a dozen lines and keeping it visible means the stopping
-        condition and the tool-result plumbing are inspectable rather than
-        inherited.
+        Yields a ``TextDelta`` per fragment of prose and exactly one
+        ``TurnComplete`` at the end, carrying the same assistant message a
+        non-streamed call would have returned: either ``tool_calls`` to
+        execute, or ``content`` and the loop is done. So the loop above drives
+        identically whether or not anyone is watching it type.
+
+        Deliberately not wrapped in a framework — the loop is a dozen lines and
+        keeping it visible means the stopping condition and the tool-result
+        plumbing are inspectable rather than inherited.
         """
         if not self.is_configured:
             raise LLMError("No LLM API key is configured.")
@@ -231,14 +266,172 @@ class LLMClient:
             # before generation rather than after it.
             "max_completion_tokens": max_tokens or settings.llm_chat_output_tokens,
             "messages": messages,
+            "stream": True,
+            # Usage is omitted from a streamed response unless it is asked for.
+            # Without this every turn reports zero tokens: the cache hit rate
+            # the loop logs goes to nothing and LangSmith prices the run at
+            # zero — both silently, and exactly as the traffic moves here.
+            "stream_options": {"include_usage": True},
         }
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        body, usage = await self._post(payload, payload["model"])
-        record_model(usage.model, settings.llm_provider)
-        return body["choices"][0]["message"], usage
+        record_model(payload["model"], settings.llm_provider)
+        async for event in self._stream(payload, payload["model"]):
+            yield event
+
+    async def _stream(self, payload: dict[str, Any], model: str) -> AsyncIterator[StreamEvent]:
+        """Open the stream, retrying only while nothing has been delivered.
+
+        ``_post``'s retry loop cannot simply be reused. Once a fragment has
+        been handed to the caller it is already on someone's screen, and
+        starting the request again would repeat it from the beginning — so a
+        failure after the first fragment is reported rather than retried.
+        """
+        last_error: Exception | None = None
+        final_attempt = settings.llm_max_retries - 1
+
+        for attempt in range(settings.llm_max_retries):
+            started = perf_counter()
+            delivered = False
+            try:
+                # Fetched per attempt for the same reason as _post: a shutdown
+                # during the seconds this loop can sleep would otherwise leave
+                # us holding a closed client.
+                async with get_http_client().stream(
+                    "POST",
+                    f"{self._base_url}/chat/completions",
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    json=payload,
+                ) as response:
+                    if response.status_code != 200:
+                        # A streamed response arrives with its body unread, and
+                        # `_error_message` reads it — without this the provider's
+                        # own explanation is replaced by a ResponseNotRead.
+                        await response.aread()
+                        message = self._error_message(response)
+
+                        if response.status_code in RETRYABLE_STATUS:
+                            last_error = LLMError(message)
+                            logger.warning(
+                                "Groq %s (attempt %d/%d): %s",
+                                response.status_code,
+                                attempt + 1,
+                                settings.llm_max_retries,
+                                message,
+                            )
+                            if attempt < final_attempt:
+                                await self._backoff(attempt, response.headers.get("retry-after"))
+                            continue
+
+                        logger.error(
+                            "Groq %s rejected the request: %s", response.status_code, message
+                        )
+                        raise LLMError(message)
+
+                    async for event in self._read_stream(response, model, started):
+                        delivered = True
+                        yield event
+                    return
+            except (httpx.RequestError, RuntimeError) as exc:
+                if delivered:
+                    # Half an answer is on screen. Retrying would append a
+                    # second attempt to the first; saying so is the only honest
+                    # option left.
+                    raise LLMError(
+                        f"The connection to {model} dropped part-way through the answer."
+                    ) from exc
+                last_error = exc
+                if attempt < final_attempt:
+                    await self._backoff(attempt)
+                continue
+
+        raise LLMError(f"Groq unreachable after {settings.llm_max_retries} attempts: {last_error}")
+
+    @staticmethod
+    async def _read_stream(
+        response: httpx.Response, model: str, started: float
+    ) -> AsyncIterator[StreamEvent]:
+        """Server-sent chunks into text fragments and one assembled turn.
+
+        Tool calls are the fiddly part: the name arrives in one chunk and the
+        JSON arguments dribble in over the next several, keyed by their index
+        in the call list. They are rebuilt here so that nothing above this line
+        has to know the difference.
+        """
+        content: list[str] = []
+        tool_calls: dict[int, dict[str, Any]] = {}
+        finish_reason: str | None = None
+        raw_usage: dict[str, Any] = {}
+
+        async for line in response.aiter_lines():
+            if not line.startswith("data:"):
+                continue
+            data = line[len("data:") :].strip()
+            if data == "[DONE]":
+                break
+
+            try:
+                chunk = json.loads(data)
+            except json.JSONDecodeError:
+                logger.warning("Ignoring an unparseable stream chunk from %s", model)
+                continue
+
+            # Arrives as a final chunk carrying no choices, because of
+            # stream_options above.
+            raw_usage = chunk.get("usage") or raw_usage
+
+            for choice in chunk.get("choices") or []:
+                finish_reason = choice.get("finish_reason") or finish_reason
+                delta = choice.get("delta") or {}
+
+                if text := delta.get("content"):
+                    content.append(text)
+                    yield TextDelta(text)
+
+                for call in delta.get("tool_calls") or []:
+                    slot = tool_calls.setdefault(
+                        call.get("index", 0),
+                        {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                    )
+                    if call.get("id"):
+                        slot["id"] = call["id"]
+                    fragment = call.get("function") or {}
+                    if fragment.get("name"):
+                        slot["function"]["name"] = fragment["name"]
+                    # Concatenated rather than assigned: this is one JSON object
+                    # arriving a few characters at a time.
+                    slot["function"]["arguments"] += fragment.get("arguments") or ""
+
+        # The same guard the non-streamed path carries, and streaming does not
+        # retire it. A truncated sentence is at least visible; a tool call cut
+        # mid-JSON either fails to parse or parses into arguments nobody asked
+        # for, and neither announces itself.
+        if finish_reason == "length":
+            raise LLMError(
+                f"{model} hit the output ceiling before finishing. "
+                "Ask for less at once, or raise LLM_CHAT_OUTPUT_TOKENS."
+            )
+
+        message: dict[str, Any] = {"role": "assistant", "content": "".join(content) or None}
+        if tool_calls:
+            message["tool_calls"] = [tool_calls[index] for index in sorted(tool_calls)]
+
+        cached = (raw_usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
+        yield TurnComplete(
+            message=message,
+            usage=LLMUsage(
+                model=model,
+                prompt_tokens=raw_usage.get("prompt_tokens", 0),
+                completion_tokens=raw_usage.get("completion_tokens", 0),
+                total_tokens=raw_usage.get("total_tokens", 0),
+                cached_tokens=cached,
+                # `response.elapsed` is only populated once a streamed response
+                # is closed, which is after this line runs.
+                latency_ms=int((perf_counter() - started) * 1000),
+            ),
+        )
 
     async def _post(self, payload: dict[str, Any], model: str) -> tuple[dict[str, Any], LLMUsage]:
         last_error: Exception | None = None

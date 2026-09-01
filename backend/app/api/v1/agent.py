@@ -17,21 +17,35 @@ reversible by appending a correction.
 """
 
 import asyncio
+import json
 import logging
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Body
+from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.assistant import run_assistant, save_turn
+from app.agent.assistant import (
+    AssistantResult,
+    Delta,
+    Superseded,
+    ToolStarted,
+    TurnEvent,
+    run_assistant,
+    save_turn,
+    stream_assistant,
+)
 from app.agent.llm_client import LLMError, llm_client
 from app.agent.prompts.assistant import ASSISTANT_PROMPT_VERSION
-from app.api.deps import CurrentUser, DbSession
+from app.api.deps import Claims, CurrentUser, DbSession, provision_user
+from app.core.auth import TokenClaims
 from app.core.config import settings
 from app.core.exceptions import InvalidOperationError
+from app.db.session import user_session
 from app.domain.enums import EventSource, EventType, MessageRole
 from app.models.application import Application, InterviewStage
 from app.schemas.agent import (
@@ -86,6 +100,10 @@ async def chat(payload: ChatRequest, user: CurrentUser, session: DbSession) -> C
     except LLMError as exc:
         raise InvalidOperationError(str(exc)) from exc
 
+    return _reply(result)
+
+
+def _reply(result: AssistantResult) -> ChatResponse:
     return ChatResponse(
         message=result.message,
         pending_action=ActionPreview(**result.proposal) if result.proposal else None,
@@ -95,6 +113,104 @@ async def chat(payload: ChatRequest, user: CurrentUser, session: DbSession) -> C
         tools_used=result.tools_used,
         total_tokens=result.total_tokens,
     )
+
+
+@router.post("/chat/stream", summary="Ask the assistant, delivered as it answers")
+async def chat_stream(payload: ChatRequest, claims: Claims) -> StreamingResponse:
+    """The same turn as `/chat`, arriving a fragment at a time.
+
+    Identical in everything that matters: the same loop, the same read-only
+    tools, the same proposal handed back for confirmation rather than acted on.
+    Only the delivery differs — the answer streams, and each tool is named as it
+    runs, so a turn that takes six rounds looks like work rather than a hung
+    request.
+
+    Depends on the claims rather than on `DbSession` deliberately. The response
+    outlives the function that returns it, while a session opened by a
+    dependency is committed on a schedule this generator does not control; so
+    it opens its own and commits when the turn is genuinely finished.
+    """
+    if not llm_client.is_configured:
+        raise InvalidOperationError(
+            "No LLM is configured, so the assistant is unavailable. "
+            "Set GROQ_API_KEY (or switch LLM_PROVIDER) and restart the API."
+        )
+
+    return StreamingResponse(
+        _turn_events(claims, payload.message),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            # nginx buffers proxied responses by default, which would hold the
+            # whole answer back and hand it over in one piece — precisely what
+            # this endpoint exists to avoid, and invisible in development
+            # because there is no proxy in front of it there.
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _sse(event: dict[str, Any]) -> str:
+    """One server-sent event.
+
+    JSON on a single line, so a reply containing a blank line — which a drafted
+    follow-up email always does — cannot end the frame half-way through itself.
+    """
+    return f"data: {json.dumps(event, separators=(',', ':'))}\n\n"
+
+
+def _as_event(event: TurnEvent) -> dict[str, Any]:
+    if isinstance(event, Delta):
+        return {"type": "delta", "text": event.text}
+    if isinstance(event, ToolStarted):
+        return {"type": "tool", "name": event.name}
+    if isinstance(event, Superseded):
+        return {"type": "superseded"}
+
+    # The finished turn, in the shape `/chat` returns — so the client parses one
+    # response body, not two.
+    return {"type": "done", **_reply(event.result).model_dump(mode="json")}
+
+
+async def _turn_events(claims: TokenClaims, message: str) -> AsyncIterator[str]:
+    """The turn, as server-sent events.
+
+    Failures are events rather than status codes. By the time anything here can
+    go wrong the response is already a 200 with its headers on the wire, so the
+    only honest way to report one is inside the stream.
+    """
+    # Sent before any work begins, which is what lets the client tell "connected
+    # and thinking" apart from "the request never arrived".
+    yield _sse({"type": "start"})
+
+    try:
+        async with asyncio.timeout(settings.assistant_deadline_seconds):
+            async with user_session(claims.user_id) as session:
+                user = await provision_user(session, claims)
+                await ensure_default_rules(session, user.id)
+
+                async for event in stream_assistant(session, user.id, message):
+                    yield _sse(_as_event(event))
+    except TimeoutError:
+        yield _sse(
+            {
+                "type": "error",
+                "detail": "The assistant took too long to answer. "
+                "Try asking for one thing at a time.",
+            }
+        )
+    except LLMError as exc:
+        yield _sse({"type": "error", "detail": str(exc)})
+    except Exception:
+        # The transaction rolled back on the way out, so the claim in the second
+        # sentence is one the database is actually keeping.
+        logger.exception("The assistant stream failed for user %s", claims.user_id)
+        yield _sse(
+            {
+                "type": "error",
+                "detail": "The assistant failed part-way through. Nothing was saved.",
+            }
+        )
 
 
 @router.post("/confirm", response_model=ConfirmResult, summary="Carry out a proposed action")

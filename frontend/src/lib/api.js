@@ -66,6 +66,79 @@ export async function apiFetch(path, { method = 'GET', body, signal } = {}) {
 }
 
 /**
+ * Server-sent events over POST.
+ *
+ * Not EventSource: that only issues GETs and cannot carry an Authorization
+ * header, so the message would have to travel in the query string and the
+ * token with it. This reads the body as it arrives instead.
+ *
+ * Frames are `data: {json}\n\n`. The buffer matters — a chunk boundary lands
+ * mid-frame often enough that parsing each read on its own throws within a
+ * sentence or two of the first answer.
+ */
+async function apiStream(path, { body, signal, onEvent }) {
+  const token = await getAccessToken()
+
+  let response
+  try {
+    response = await fetch(`${BASE_URL}${path}`, {
+      method: 'POST',
+      signal,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(body),
+    })
+  } catch (cause) {
+    if (cause?.name === 'AbortError') throw cause
+    throw new ApiError(
+      `Could not reach the API at ${BASE_URL}. It may be restarting — try again in a moment.`,
+      0,
+      null,
+    )
+  }
+
+  if (response.status === 401) {
+    await supabase?.auth.signOut()
+    throw new ApiError('Session expired. Please sign in again.', 401, null)
+  }
+
+  // Everything that can be refused is refused before the stream opens, so a
+  // non-200 here still has an ordinary JSON body to read.
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null)
+    const detail = payload?.detail
+    throw new ApiError(
+      Array.isArray(detail)
+        ? detail.map((d) => d.msg).join(', ')
+        : (detail ?? `Request failed with status ${response.status}`),
+      response.status,
+      payload,
+    )
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+
+    let boundary
+    while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+      const frame = buffer.slice(0, boundary)
+      buffer = buffer.slice(boundary + 2)
+      for (const line of frame.split('\n')) {
+        if (line.startsWith('data:')) onEvent(JSON.parse(line.slice(5)))
+      }
+    }
+  }
+}
+
+/**
  * File upload.
  *
  * Separate from apiFetch because a multipart body must NOT carry an explicit
@@ -154,7 +227,12 @@ export const api = {
   // chat NEVER writes — it returns a proposal. confirm performs the write, and
   // the body is `{kind, ...proposal.payload}`: the server picks the schema to
   // validate against from `kind`, so the client never builds it field by field.
-  agentChat: (message) => apiFetch('/api/v1/agent/chat', { method: 'POST', body: { message } }),
+  //
+  // The streamed form is the same turn with the same guarantees; `onEvent`
+  // sees the answer as it is written and each tool as it runs, and the last
+  // event is the `/agent/chat` response body in full.
+  agentChatStream: (message, { onEvent, signal } = {}) =>
+    apiStream('/api/v1/agent/chat/stream', { body: { message }, onEvent, signal }),
   agentConfirm: (body) => apiFetch('/api/v1/agent/confirm', { method: 'POST', body }),
 
   // Ranked by meaning, not keyword — so it answers "the RAG roles" for a

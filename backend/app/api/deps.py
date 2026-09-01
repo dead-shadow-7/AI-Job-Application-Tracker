@@ -26,6 +26,11 @@ Claims = Annotated[TokenClaims, Depends(get_current_claims)]
 
 
 async def get_current_user(claims: Claims, session: DbSession) -> User:
+    """The caller's profile, on the request-scoped session."""
+    return await provision_user(session, claims)
+
+
+async def provision_user(session: AsyncSession, claims: TokenClaims) -> User:
     """Fetch the caller's profile, provisioning it on first login.
 
     Supabase owns identity; this table owns everything we add to it. A user
@@ -36,6 +41,10 @@ async def get_current_user(claims: Claims, session: DbSession) -> User:
     together on first login would otherwise race and one would fail on the
     primary key. The conflict branch also keeps ``email`` in sync when it
     changes upstream.
+
+    Takes the session as an argument rather than as a dependency because the
+    streamed assistant turn opens its own — see ``db.session.user_session`` —
+    and first login must still provision there.
     """
     if not claims.email:
         raise HTTPException(

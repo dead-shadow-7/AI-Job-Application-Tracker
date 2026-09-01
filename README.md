@@ -394,6 +394,33 @@ Agent writes go through the same append-only log as manual ones, marked
 `source='agent'`, so they are visible on the timeline and undone by appending a
 correction rather than by editing history.
 
+### The reply streams, because the wait was the whole experience
+
+`/agent/chat/stream` is the same loop delivered as server-sent events: prose as
+the model writes it, and each tool named as it runs. It is not decoration. A
+turn is up to six rounds of model call plus tool lookup, and the drawer used to
+spend all of that showing the word "Thinking…" — from where the user sits,
+indistinguishable from a request that had already failed.
+
+Three things follow from streaming that did not have to be decided before:
+
+- **A failure is an event, not a status code.** By the time anything can go
+  wrong the response is a 200 with its headers already sent, so errors travel
+  inside the stream.
+- **The turn opens its own transaction.** A streamed response outlives the
+  endpoint that returned it, and a session held by a FastAPI dependency is
+  committed on a schedule the generator does not control. A turn that fails
+  part-way writes nothing at all.
+- **Narration before a tool call is withdrawn.** Models sometimes write "let me
+  check that" and then call a tool. That sentence never reaches the transcript,
+  so leaving it on screen would put a line in the conversation that disappears
+  on the next reload.
+
+`/agent/chat` still exists and still returns the whole turn in one response.
+Both drive the same loop — `run_assistant` simply drains the generator the
+streaming endpoint forwards — because the property this design rests on, that
+no tool the loop can reach writes, is only checkable if there is one loop.
+
 ## Follow-up detection is SQL
 
 Deciding something has been silent for seven days is a date subtraction. Giving

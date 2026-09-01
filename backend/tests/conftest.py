@@ -62,6 +62,7 @@ os.environ.pop("LANGSMITH_API_KEY", None)
 import asyncio  # noqa: E402
 import hashlib  # noqa: E402
 import json  # noqa: E402
+import re  # noqa: E402
 import uuid  # noqa: E402
 from collections.abc import AsyncIterator  # noqa: E402
 from datetime import UTC, datetime, timedelta  # noqa: E402
@@ -299,15 +300,24 @@ class ScriptedLLM:
         self.is_configured = True
         self.messages_seen: list[list[dict[str, Any]]] = []
 
-    async def chat(self, *, messages: list[dict[str, Any]], **_: Any) -> Any:
-        from app.agent.llm_client import LLMUsage
+    async def stream_chat(self, *, messages: list[dict[str, Any]], **_: Any) -> Any:
+        from app.agent.llm_client import LLMUsage, TextDelta, TurnComplete
 
         self.messages_seen.append(messages)
         if self._error:
             raise self._error
         turn = self._turns[min(self.calls, len(self._turns) - 1)]
         self.calls += 1
-        return turn, LLMUsage(model="stub", total_tokens=500, latency_ms=100)
+
+        # Handed over a word at a time rather than in one block. The real client
+        # fragments everything it returns, and a stub that does not would let
+        # the loop depend on receiving whole sentences without anyone noticing.
+        for fragment in re.findall(r"\S+\s*", turn.get("content") or ""):
+            yield TextDelta(fragment)
+
+        yield TurnComplete(
+            message=turn, usage=LLMUsage(model="stub", total_tokens=500, latency_ms=100)
+        )
 
     def tool_output(self, index: int = 0) -> str:
         """What the last round handed back to the model."""

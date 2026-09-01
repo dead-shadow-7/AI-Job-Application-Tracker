@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from uuid import UUID
 
 from sqlalchemy import text
@@ -57,3 +58,14 @@ async def open_user_session(user_id: UUID) -> AsyncIterator[AsyncSession]:
         except Exception:
             await session.rollback()
             raise
+
+
+# The same session, as a context manager, for code that runs outside the
+# request-dependency machinery — chiefly the streamed assistant turn, whose
+# response outlives the endpoint that returned it and which therefore cannot
+# borrow a session FastAPI will close on its own schedule.
+#
+# `async for session in open_user_session(...)` is not equivalent: an exception
+# in the body is never thrown back into the generator, so the rollback branch
+# above does not run and the transaction is abandoned rather than undone.
+user_session = asynccontextmanager(open_user_session)

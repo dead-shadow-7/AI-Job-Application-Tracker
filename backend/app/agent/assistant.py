@@ -9,13 +9,14 @@ writes — is only obvious if you can see every tool the loop can reach.
 import json
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.agent.llm_client import LLMClient, llm_client
+from app.agent.llm_client import LLMClient, LLMUsage, TextDelta, llm_client
 from app.agent.prompts.assistant import ASSISTANT_SYSTEM_PROMPT
 from app.agent.tools import TOOL_SCHEMAS, run_tool
 from app.agent.tracing import hide, traced
@@ -65,6 +66,68 @@ class AssistantResult:
     cached_tokens: int = 0
 
 
+# --- What a turn emits while it runs ---------------------------------------
+#
+# A turn can take six rounds and most of them are spent waiting on a tool. The
+# events below are what makes that wait legible: prose as it is written, and
+# the name of whatever is being looked up in between.
+
+
+@dataclass(slots=True)
+class Delta:
+    """Part of the reply, as the model writes it."""
+
+    text: str
+
+
+@dataclass(slots=True)
+class ToolStarted:
+    """A tool is about to run.
+
+    Emitted before the call rather than after, because the point is to account
+    for the pause rather than to report it once it is over.
+    """
+
+    name: str
+
+
+@dataclass(slots=True)
+class Superseded:
+    """Everything streamed this round belonged to a tool call, not an answer.
+
+    Models sometimes narrate before reaching for a tool — "let me check that" —
+    and that sentence is not part of the reply. It is never saved to the
+    transcript and would not survive a reload, so it is withdrawn rather than
+    left on screen as something the conversation no longer contains.
+    """
+
+
+@dataclass(slots=True)
+class Completed:
+    """The finished turn. Always the last event, unless the turn raised."""
+
+    result: AssistantResult
+
+
+TurnEvent = Delta | ToolStarted | Superseded | Completed
+
+
+def _turn_run(outputs: Any) -> dict[str, Any]:
+    """Put the answer in the trace, not the several hundred fragments of it."""
+    value = outputs.get("output") if isinstance(outputs, dict) else outputs
+    events = value if isinstance(value, list) else [value]
+    done = next((e for e in reversed(events) if isinstance(e, Completed)), None)
+    if done is None:
+        return outputs if isinstance(outputs, dict) else {"output": outputs}
+
+    return {
+        "message": done.result.message,
+        "proposal": done.result.proposal,
+        "tools_used": done.result.tools_used,
+        "total_tokens": done.result.total_tokens,
+    }
+
+
 async def load_history(session: AsyncSession, user_id: uuid.UUID) -> list[dict[str, str]]:
     """Recent turns, oldest first, within both a turn and a character budget."""
     rows = list(
@@ -98,7 +161,6 @@ async def save_turn(
     await session.flush()
 
 
-@traced("assistant_turn", process_inputs=hide("session", "client"))
 async def run_assistant(
     session: AsyncSession,
     user_id: uuid.UUID,
@@ -106,7 +168,40 @@ async def run_assistant(
     *,
     client: LLMClient | None = None,
 ) -> AssistantResult:
-    """Answer, using tools as needed, and possibly propose a change."""
+    """The whole turn at once, for callers that are not streaming it.
+
+    Drains the generator below rather than reimplementing it. There is one loop
+    on purpose: the property this design rests on — that no tool the loop can
+    reach writes — is only checkable if there is one place to check it.
+    """
+    result: AssistantResult | None = None
+    async for event in stream_assistant(session, user_id, message, client=client):
+        if isinstance(event, Completed):
+            result = event.result
+
+    if result is None:  # pragma: no cover - the generator's last act is Completed
+        raise RuntimeError("The assistant loop ended without producing a result.")
+    return result
+
+
+@traced(
+    "assistant_turn",
+    process_inputs=hide("session", "client"),
+    process_outputs=_turn_run,
+)
+async def stream_assistant(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    message: str,
+    *,
+    client: LLMClient | None = None,
+) -> AsyncIterator[TurnEvent]:
+    """Answer, using tools as needed, and possibly propose a change.
+
+    Emits the reply as the model writes it and names each tool as it runs; the
+    last event carries the finished turn. Writes to the transcript happen once,
+    at the end, so a turn that fails part-way leaves nothing behind.
+    """
     model = client or llm_client
 
     history = await load_history(session, user_id)
@@ -124,23 +219,39 @@ async def run_assistant(
     reply_text = ""
 
     for _round in range(MAX_ROUNDS):
-        assistant_message, usage = await model.chat(messages=messages, tools=TOOL_SCHEMAS)
-        total_tokens += usage.total_tokens
-        cached_tokens += usage.cached_tokens
-        # A prefix that stops being cached is a silent 2x on the prompt bill —
-        # it does not fail, it just costs more — so it is logged rather than
-        # left to be noticed on an invoice.
-        logger.debug(
-            "round: %d prompt tokens, %d from cache (%.0f%%)",
-            usage.prompt_tokens,
-            usage.cached_tokens,
-            usage.cache_hit_rate * 100,
-        )
+        streamed = ""
+        assistant_message: dict[str, Any] = {}
+        usage: LLMUsage | None = None
+
+        async for chunk in model.stream_chat(messages=messages, tools=TOOL_SCHEMAS):
+            if isinstance(chunk, TextDelta):
+                streamed += chunk.text
+                yield Delta(chunk.text)
+            else:
+                assistant_message, usage = chunk.message, chunk.usage
+
+        if usage is not None:
+            total_tokens += usage.total_tokens
+            cached_tokens += usage.cached_tokens
+            # A prefix that stops being cached is a silent 2x on the prompt bill
+            # — it does not fail, it just costs more — so it is logged rather
+            # than left to be noticed on an invoice.
+            logger.debug(
+                "round: %d prompt tokens, %d from cache (%.0f%%)",
+                usage.prompt_tokens,
+                usage.cached_tokens,
+                usage.cache_hit_rate * 100,
+            )
 
         tool_calls = assistant_message.get("tool_calls") or []
         if not tool_calls:
             reply_text = (assistant_message.get("content") or "").strip()
             break
+
+        # Anything written this round was a preamble to the tool call, not the
+        # answer — take it back before the tools are announced.
+        if streamed:
+            yield Superseded()
 
         # The assistant turn must go back verbatim, tool_calls included, or the
         # follow-up tool results have nothing to attach to.
@@ -148,6 +259,7 @@ async def run_assistant(
 
         for call in tool_calls:
             name = call["function"]["name"]
+            yield ToolStarted(name)
             try:
                 arguments = json.loads(call["function"].get("arguments") or "{}")
             except json.JSONDecodeError:
@@ -190,11 +302,17 @@ async def run_assistant(
     await save_turn(session, user_id, MessageRole.USER, message)
     await save_turn(session, user_id, MessageRole.ASSISTANT, reply_text)
 
-    return AssistantResult(
-        message=reply_text,
-        proposal=proposal,
-        attachments=attachments,
-        tools_used=tools_used,
-        total_tokens=total_tokens,
-        cached_tokens=cached_tokens,
+    # `message` is sent again even though the client has been assembling it from
+    # deltas all along. The two disagree whenever the loop hit its round limit
+    # or the last round was withdrawn, and the transcript is the version that
+    # was saved — so the client renders this one and any drift resolves itself.
+    yield Completed(
+        AssistantResult(
+            message=reply_text,
+            proposal=proposal,
+            attachments=attachments,
+            tools_used=tools_used,
+            total_tokens=total_tokens,
+            cached_tokens=cached_tokens,
+        )
     )

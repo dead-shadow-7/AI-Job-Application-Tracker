@@ -1,5 +1,6 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Markdown } from '@/components/Markdown'
 import { api } from '@/lib/api'
 
 /**
@@ -15,22 +16,132 @@ import { api } from '@/lib/api'
  * The card is deliberately generic rather than per-action: the assistant can
  * propose four kinds of change now, and a switch here would be a fifth place to
  * forget to update when a fifth arrives.
+ *
+ * The answer streams. That is not decoration: a turn can take six rounds of
+ * model call plus tool, and the old "Thinking…" line spent all of it saying
+ * nothing — indistinguishable, from where the user sits, from a request that
+ * had already failed.
  */
 // Mirrors MAX_MESSAGE_CHARS in backend/app/schemas/agent.py. Enforced here so
 // the limit is a full box rather than a red validation error after you have
 // already pasted and pressed send.
 const MAX_MESSAGE_CHARS = 10_000
 
+// How much of the outstanding backlog to render each frame. Tokens arrive from
+// the provider in uneven bursts — thirty characters, then nothing for 200ms —
+// and painting each burst on arrival makes the text jerk. Draining a fraction
+// per frame turns that into an even flow, and because the fraction is of
+// whatever is *outstanding*, a large burst is still absorbed in a few frames
+// rather than metered out at a fixed speed the answer eventually outruns.
+const CATCH_UP = 8
+
+// Below this many pixels from the bottom, the transcript follows new text.
+// Above it the user has scrolled up to read something and must not be yanked.
+const STICK_WITHIN = 64
+
+// The longest the finished turn will wait for the animation to catch up. At
+// sixty frames a second any realistic backlog drains in well under a second,
+// so in practice this only fires when frames are not running at all.
+const DRAIN_CEILING_MS = 2_000
+
 export function AgentChat({ open, onClose }) {
   const queryClient = useQueryClient()
   const [turns, setTurns] = useState([])
   const [draft, setDraft] = useState('')
-  const endRef = useRef(null)
   const inputRef = useRef(null)
+  const scrollRef = useRef(null)
+  const stickRef = useRef(true)
 
+  /* The turn in flight. `liveText` is what is on screen, which lags what has
+     arrived — see the pump below. Tools are mirrored into a ref because the
+     mutation's error handler needs them after React has moved on. */
+  const [liveText, setLiveText] = useState('')
+  const [liveTools, setLiveTools] = useState([])
+  const toolsRef = useRef([])
+
+  const receivedRef = useRef('') // everything the server has sent
+  const shownRef = useRef('') // everything painted so far
+  const frameRef = useRef(0)
+  const settleRef = useRef(null)
+
+  /* One character-advancing frame. Reschedules itself while it is behind and
+     stops when it catches up, so an idle drawer costs nothing. */
+  const pump = useCallback(function advance() {
+    const behind = receivedRef.current.length - shownRef.current.length
+    if (behind > 0) {
+      const step = Math.max(1, Math.ceil(behind / CATCH_UP))
+      shownRef.current = receivedRef.current.slice(0, shownRef.current.length + step)
+      setLiveText(shownRef.current)
+      frameRef.current = requestAnimationFrame(advance)
+      return
+    }
+    frameRef.current = 0
+    settleRef.current?.()
+    settleRef.current = null
+  }, [])
+
+  const receive = useCallback(
+    (text) => {
+      receivedRef.current += text
+      if (!frameRef.current) frameRef.current = requestAnimationFrame(pump)
+    },
+    [pump],
+  )
+
+  /* Take back what was streamed. The model narrated before calling a tool, so
+     that sentence was never part of the reply and was never saved. */
+  const withdraw = useCallback(() => {
+    receivedRef.current = ''
+    shownRef.current = ''
+    setLiveText('')
+  }, [])
+
+  /* Resolves once the last character is on screen. Without it the finished
+     turn replaces the live one mid-animation and the tail is never shown. */
+  const drained = useCallback(
+    () =>
+      new Promise((resolve) => {
+        if (!frameRef.current) return resolve()
+
+        /* A browser does not run animation frames for a hidden tab, so an
+           answer that finishes while the user is looking at something else
+           would never drain and the turn would sit unresolved until they came
+           back to it. Past the ceiling, show the rest at once. */
+        const snap = setTimeout(() => {
+          cancelAnimationFrame(frameRef.current)
+          frameRef.current = 0
+          settleRef.current = null
+          shownRef.current = receivedRef.current
+          setLiveText(shownRef.current)
+          resolve()
+        }, DRAIN_CEILING_MS)
+
+        settleRef.current = () => {
+          clearTimeout(snap)
+          resolve()
+        }
+      }),
+    [],
+  )
+
+  const clearLive = useCallback(() => {
+    receivedRef.current = ''
+    shownRef.current = ''
+    toolsRef.current = []
+    setLiveText('')
+    setLiveTools([])
+  }, [])
+
+  useEffect(() => () => cancelAnimationFrame(frameRef.current), [])
+
+  /* Follow the bottom, but only if that is where the user already is. Set
+     directly rather than through scrollIntoView: this runs on every frame of
+     the animation, and a smooth scroll retargeted sixty times a second never
+     arrives anywhere. */
   useEffect(() => {
-    endRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [turns])
+    const box = scrollRef.current
+    if (box && stickRef.current) box.scrollTop = box.scrollHeight
+  }, [turns, liveText, liveTools])
 
   /* Grow to fit what is in it, up to a ceiling, then scroll. Height has to be
      reset to auto first or scrollHeight only ever reports the taller of the
@@ -43,9 +154,40 @@ export function AgentChat({ open, onClose }) {
   }, [draft])
 
   const send = useMutation({
-    mutationFn: (message) => api.agentChat(message),
-    onMutate: (message) => setTurns((t) => [...t, { role: 'you', text: message }]),
-    onSuccess: (reply) =>
+    mutationFn: async (message) => {
+      let finished = null
+      let failure = null
+
+      await api.agentChatStream(message, {
+        onEvent: (event) => {
+          if (event.type === 'delta') receive(event.text)
+          else if (event.type === 'superseded') withdraw()
+          else if (event.type === 'tool') {
+            toolsRef.current = [...toolsRef.current, event.name]
+            setLiveTools(toolsRef.current)
+          } else if (event.type === 'done') finished = event
+          // Reported in the stream rather than as a status code, because by
+          // then the response is already a 200 with its headers sent. Recorded
+          // and raised after the body closes rather than thrown from here, so
+          // the reader is not abandoned mid-frame.
+          else if (event.type === 'error') failure = event.detail
+        },
+      })
+
+      await drained()
+      if (failure) throw new Error(failure)
+      if (!finished) throw new Error('The assistant stopped before finishing its answer.')
+      return finished
+    },
+    onMutate: (message) => {
+      clearLive()
+      stickRef.current = true
+      setTurns((t) => [...t, { role: 'you', text: message }])
+    },
+    onSuccess: (reply) => {
+      // The server's copy, not the one assembled from deltas. They agree
+      // except when the loop hit its round limit or withdrew a preamble, and
+      // this is the version that went into the transcript.
       setTurns((t) => [
         ...t,
         {
@@ -55,9 +197,21 @@ export function AgentChat({ open, onClose }) {
           attachments: reply.attachments ?? [],
           tools: reply.tools_used ?? [],
         },
-      ]),
-    onError: (error) =>
-      setTurns((t) => [...t, { role: 'agent', text: error.message, isError: true }]),
+      ])
+      clearLive()
+    },
+    onError: (error) => {
+      // Whatever had been written is kept. It is half an answer, but throwing
+      // it away to show the error alone loses the only part that was working.
+      const partial = shownRef.current
+      const tools = toolsRef.current
+      setTurns((t) => [
+        ...t,
+        ...(partial ? [{ role: 'agent', text: partial, tools }] : []),
+        { role: 'agent', text: error.message, isError: true },
+      ])
+      clearLive()
+    },
   })
 
   const confirm = useMutation({
@@ -118,7 +272,15 @@ export function AgentChat({ open, onClose }) {
         </button>
       </header>
 
-      <div className="flex-1 space-y-3 overflow-y-auto px-4 py-4">
+      <div
+        ref={scrollRef}
+        onScroll={(e) => {
+          const box = e.currentTarget
+          stickRef.current =
+            box.scrollHeight - box.scrollTop - box.clientHeight < STICK_WITHIN
+        }}
+        className="flex-1 space-y-3 overflow-y-auto px-4 py-4"
+      >
         {turns.length === 0 && (
           <div className="rounded-lg bg-surface-muted p-3 text-sm text-ink-muted">
             <p>Try:</p>
@@ -135,16 +297,20 @@ export function AgentChat({ open, onClose }) {
 
         {turns.map((turn, index) => (
           <div key={index} className={turn.role === 'you' ? 'text-right' : ''}>
+            {/* Only the assistant's prose is markdown. What you typed is shown
+                as you typed it — asterisks in a pasted title are punctuation,
+                not formatting — and an error message is not the model's to
+                format at all. */}
             <div
-              className={`inline-block max-w-[85%] whitespace-pre-wrap rounded-lg px-3 py-2 text-sm ${
+              className={`inline-block max-w-[85%] rounded-lg px-3 py-2 text-left text-sm ${
                 turn.role === 'you'
-                  ? 'bg-accent text-white'
+                  ? 'bg-accent whitespace-pre-wrap text-white'
                   : turn.isError
-                    ? 'bg-rose-50 text-rose-700'
+                    ? 'bg-rose-50 whitespace-pre-wrap text-rose-700'
                     : 'bg-surface-muted'
               }`}
             >
-              {turn.text}
+              {turn.role === 'you' || turn.isError ? turn.text : <Markdown>{turn.text}</Markdown>}
             </div>
 
             {/* Documents come from the database, not from the model's output.
@@ -258,8 +424,28 @@ export function AgentChat({ open, onClose }) {
           </div>
         ))}
 
-        {send.isPending && <p className="text-sm text-ink-muted">Thinking…</p>}
-        <div ref={endRef} />
+        {/* The turn in flight. Once it settles the same text arrives as an
+            ordinary entry in `turns`, and because the animation has already
+            drained by then the swap is invisible. */}
+        {send.isPending && (
+          <div>
+            <div className="inline-block max-w-[85%] rounded-lg bg-surface-muted px-3 py-2 text-sm">
+              {liveText ? <Markdown>{liveText}</Markdown> : <span className="text-ink-muted">Thinking…</span>}
+              {/* Sits under the text rather than after it: mid-stream the last
+                  block is a paragraph or a list item, and a caret spliced into
+                  the flow jumps around as the markdown re-parses each frame. */}
+              <span className="mt-1 block h-0.5 w-4 animate-pulse rounded-full bg-ink-muted" />
+            </div>
+
+            {/* Named as they run, not listed at the end: this is what accounts
+                for the wait while the loop is several rounds deep. */}
+            {liveTools.length > 0 && (
+              <p className="mt-1 text-[11px] text-ink-muted">
+                looking up: {[...new Set(liveTools)].join(', ')}
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       <form
