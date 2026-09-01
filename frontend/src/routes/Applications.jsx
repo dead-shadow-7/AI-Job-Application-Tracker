@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { ErrorState } from '@/components/ErrorState'
+import { MeaningResults } from '@/components/MeaningResults'
 import { NeedsAttention } from '@/components/NeedsAttention'
 import { Spinner } from '@/components/Spinner'
 import { StatusBadge } from '@/components/StatusBadge'
@@ -22,6 +23,17 @@ const STATUS_ORDER = [
 
 const PAGE_SIZE = 25
 
+/* Two searches that cannot be merged, so they are offered as a choice rather
+   than silently blended.
+     filter  — ILIKE over title and company. Narrows the table, combines with
+               the status chips and the sort, and paginates.
+     meaning — pgvector over the job descriptions. Returns its own ranking, so
+               the chips and the sort have nothing to act on and are hidden. */
+const MODES = [
+  ['filter', 'Filter', 'Match the role or company name'],
+  ['meaning', 'By meaning', 'Search what the postings are about, not the words they use'],
+]
+
 export function Applications() {
   // Filters live in the URL so a filtered view is linkable and survives reload.
   const [params, setParams] = useSearchParams()
@@ -32,6 +44,8 @@ export function Applications() {
   const activeOnly = params.get('active_only') === 'true'
   const sort = params.get('sort') ?? 'last_activity_at'
   const page = Number(params.get('page') ?? 0)
+  const mode = params.get('mode') === 'meaning' ? 'meaning' : 'filter'
+  const searching = mode === 'meaning' && search.trim().length >= 2
 
   const filters = useMemo(
     () => ({
@@ -50,6 +64,9 @@ export function Applications() {
   const applications = useQuery({
     queryKey: ['applications', filters],
     queryFn: () => api.listApplications(filters),
+    // Nothing renders it while semantic results are showing, and it would
+    // otherwise fire a request per keystroke-submit for a list nobody sees.
+    enabled: !searching,
   })
   const stats = useQuery({ queryKey: ['stats'], queryFn: api.getApplicationStats })
 
@@ -105,7 +122,7 @@ export function Applications() {
         <form
           onSubmit={(e) => {
             e.preventDefault()
-            update({ search: searchDraft })
+            update({ search: searchDraft, mode })
           }}
           className="flex gap-2"
         >
@@ -113,7 +130,11 @@ export function Applications() {
             type="search"
             value={searchDraft}
             onChange={(e) => setSearchDraft(e.target.value)}
-            placeholder="Search by role or company…"
+            placeholder={
+              mode === 'meaning'
+                ? 'Describe the kind of role — “retrieval and agents”…'
+                : 'Search by role or company…'
+            }
             aria-label="Search applications"
             className="min-w-0 flex-1 rounded-lg border border-border-subtle px-3 py-2 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
           />
@@ -126,6 +147,33 @@ export function Applications() {
         </form>
 
         <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex rounded-lg bg-surface-muted p-0.5" role="group" aria-label="Search mode">
+            {MODES.map(([value, label, hint]) => (
+              <button
+                key={value}
+                type="button"
+                title={hint}
+                aria-pressed={mode === value}
+                /* Carries whatever is typed but not yet submitted. Switching
+                   mode is itself an intent to search, and dropping the draft
+                   would silently clear a box that still displays it. */
+                onClick={() => update({ mode: value === 'filter' ? '' : value, search: searchDraft })}
+                className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                  mode === value ? 'bg-surface text-ink shadow-sm' : 'text-ink-muted hover:text-ink'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {mode === 'meaning' && (
+            <p className="text-xs text-ink-muted">
+              Ranked by what the descriptions are about, so status filters and sorting do not apply.
+            </p>
+          )}
+        </div>
+
+        <div className={`flex flex-wrap items-center gap-1.5 ${searching ? 'hidden' : ''}`}>
           {STATUS_ORDER.map((value) => (
             <button
               key={value}
@@ -167,12 +215,14 @@ export function Applications() {
         </div>
       </div>
 
-      {applications.isPending && <Spinner label="Loading applications" />}
-      {applications.error && (
+      {searching && <MeaningResults query={search} />}
+
+      {!searching && applications.isPending && <Spinner label="Loading applications" />}
+      {!searching && applications.error && (
         <ErrorState error={applications.error} onRetry={applications.refetch} />
       )}
 
-      {applications.data && items.length === 0 && (
+      {!searching && applications.data && items.length === 0 && (
         <div className="rounded-xl border border-dashed border-border-subtle bg-surface p-10 text-center">
           <p className="text-sm font-medium">
             {status.length || search ? 'Nothing matches those filters' : 'No applications yet'}
@@ -185,7 +235,7 @@ export function Applications() {
         </div>
       )}
 
-      {items.length > 0 && (
+      {!searching && items.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-border-subtle bg-surface">
           <table className="w-full min-w-208 text-sm">
             <thead className="border-b border-border-subtle text-left text-xs text-ink-muted">
@@ -241,7 +291,7 @@ export function Applications() {
         </div>
       )}
 
-      {total > PAGE_SIZE && (
+      {!searching && total > PAGE_SIZE && (
         <div className="flex items-center justify-between text-sm">
           <p className="text-ink-muted">
             {page * PAGE_SIZE + 1}–{Math.min((page + 1) * PAGE_SIZE, total)} of {total}

@@ -35,6 +35,22 @@ class JobDraft(JobCreate):
     title: str | None = None  # type: ignore[assignment]
 
 
+class DuplicateHint(BaseModel):
+    """A posting the user already tracks.
+
+    ``is_exact`` is carried through rather than collapsed because the two cases
+    warrant different confidence. An identical description is certainly the same
+    posting. A near match is the same *role* by embedding distance — usually a
+    repost or the same job on a second board, but occasionally two genuinely
+    different openings at one company. The reader can only judge that if the UI
+    stops short of asserting they are the same.
+    """
+
+    application_id: UUID
+    label: str = Field(description='Human-readable, e.g. "Backend Engineer at Amazon".')
+    is_exact: bool
+
+
 class IngestPreview(BaseModel):
     """The extraction, for review before anything is saved.
 
@@ -57,9 +73,9 @@ class IngestPreview(BaseModel):
     tokens_used: int
     latency_ms: int
 
-    duplicate_of: UUID | None = Field(
+    duplicate_of: DuplicateHint | None = Field(
         default=None,
-        description="An application you already track with an identical description.",
+        description="An application you already track that this posting appears to repeat.",
     )
 
 

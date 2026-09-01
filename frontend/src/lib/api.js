@@ -141,6 +141,12 @@ export const api = {
   agentChat: (message) => apiFetch('/api/v1/agent/chat', { method: 'POST', body: { message } }),
   agentConfirm: (body) => apiFetch('/api/v1/agent/confirm', { method: 'POST', body }),
 
+  // Ranked by meaning, not keyword — so it answers "the RAG roles" for a
+  // posting that never uses the word. Unrelated to listApplications' `search`,
+  // which is an ILIKE filter over title and company.
+  searchByMeaning: (q, limit) => apiFetch(`/api/v1/search${query({ q, limit })}`),
+  getAnalytics: () => apiFetch('/api/v1/analytics'),
+
   listSkills: (params = {}) => apiFetch(`/api/v1/skills${query(params)}`),
   listCompanies: (params = {}) => apiFetch(`/api/v1/companies${query(params)}`),
   updateJob: (id, body) => apiFetch(`/api/v1/jobs/${id}`, { method: 'PATCH', body }),

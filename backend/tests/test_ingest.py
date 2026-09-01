@@ -277,7 +277,38 @@ async def test_duplicate_posting_is_detected(client: AsyncClient, stub: StubLLM)
 
     again = (await user.post("/api/v1/jobs/ingest", {"raw_text": POSTING})).json()
 
-    assert again["duplicate_of"] == created.json()["id"]
+    assert again["duplicate_of"]["application_id"] == created.json()["id"]
+    # An identical description is certain, not a judgement — the review screen
+    # says so differently to a near match, so the distinction is carried.
+    assert again["duplicate_of"]["is_exact"] is True
+    assert "Razorpay" in again["duplicate_of"]["label"]
+
+
+async def test_a_reworded_repost_is_caught_as_a_near_duplicate(
+    client: AsyncClient, stub: StubLLM
+) -> None:
+    """The case the content hash cannot see, and the one that actually costs
+    you a second timeline: the same role posted again with the boilerplate
+    changed.
+
+    What this pins is that the probe is built the same way the stored vector
+    was. It caught a real bug — the check embedded the raw pasted text while
+    jobs are stored as title/company/requirements with the padding stripped, so
+    the two were never close and the exact hash was silently doing all the work.
+    How much *semantic* drift survives the threshold is a property of bge-small
+    and is not assertable against the stub.
+    """
+    user = await Session(client).start()
+    preview = (await user.post("/api/v1/jobs/ingest", {"raw_text": POSTING})).json()
+    created = await user.post("/api/v1/applications", {"job": preview["job"]})
+    assert created.status_code == 201
+
+    reworded = POSTING + "\n\nWe are an equal opportunity employer."
+    again = (await user.post("/api/v1/jobs/ingest", {"raw_text": reworded})).json()
+
+    assert again["duplicate_of"] is not None, "the hash differs; only the embedding can catch this"
+    assert again["duplicate_of"]["application_id"] == created.json()["id"]
+    assert again["duplicate_of"]["is_exact"] is False
 
 
 async def test_preview_can_be_saved_directly(client: AsyncClient, stub: StubLLM) -> None:

@@ -16,6 +16,12 @@ export function AppShell() {
           </Link>
           <div className="flex items-center gap-3">
             <Link
+              to="/insights"
+              className="text-sm text-ink-muted transition hover:text-accent"
+            >
+              Insights
+            </Link>
+            <Link
               to="/resumes"
               className="text-sm text-ink-muted transition hover:text-accent"
             >

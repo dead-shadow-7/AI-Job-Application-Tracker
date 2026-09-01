@@ -66,6 +66,10 @@ class Analytics:
     funnel: list[FunnelStage] = field(default_factory=list)
     by_platform: list[PlatformStats] = field(default_factory=list)
 
+    # The denominator behind response_rate, and not the same as `total` —
+    # saved-but-never-applied rows are excluded. Reported so the UI can render
+    # "2 of 7 replied" rather than a bare percentage whose base is a guess.
+    submitted: int = 0
     responses: int = 0
     response_rate: float | None = None
     median_days_to_response: float | None = None
@@ -100,6 +104,7 @@ async def compute_analytics(session: AsyncSession, user_id: uuid.UUID) -> Analyt
     # Counting saved-but-never-applied rows against the response rate would
     # punish the user for keeping a shortlist.
     submitted = [a for a in applications if a.applied_at is not None]
+    result.submitted = len(submitted)
     result.sample_is_small = len(submitted) < MEANINGFUL_SAMPLE
 
     if not submitted:

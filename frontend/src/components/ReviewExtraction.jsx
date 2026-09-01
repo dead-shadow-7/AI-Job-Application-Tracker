@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { formatSalary } from '@/lib/format'
 
 const FIELD =
@@ -42,14 +43,25 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
         </p>
       </div>
 
+      {/* Two different claims, deliberately worded differently. An identical
+          description is a fact; a near match is the embedding's judgement, and
+          two genuinely separate openings at one company would trip it. Saving
+          stays enabled either way — this warns, it does not block. */}
       {preview.duplicate_of && (
         <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
           <p className="text-sm text-amber-900">
-            You already track a job with this exact description.{' '}
-            <a href={`/applications/${preview.duplicate_of}`} className="font-medium underline">
-              Open it
-            </a>{' '}
-            instead of creating a duplicate.
+            {preview.duplicate_of.is_exact
+              ? 'You already track this exact posting: '
+              : 'This looks like a posting you already track: '}
+            <Link
+              to={`/applications/${preview.duplicate_of.application_id}`}
+              className="font-medium underline"
+            >
+              {preview.duplicate_of.label}
+            </Link>
+            {preview.duplicate_of.is_exact
+              ? '. Open it instead of starting a second timeline.'
+              : '. Check before saving — if it is a different opening, carry on.'}
           </p>
         </div>
       )}

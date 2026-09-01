@@ -3,6 +3,7 @@
 import hashlib
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import Select, func, or_, select
@@ -96,22 +97,36 @@ async def create_job(session: AsyncSession, payload: JobCreate, user_id: uuid.UU
     return job
 
 
-def job_embedding_text(job: Job, company_name: str, requirements: list[str]) -> str:
+def job_embedding_text(
+    *,
+    title: str | None,
+    company_name: str | None,
+    seniority: str | None = None,
+    location: str | None = None,
+    requirements: Sequence[str] = (),
+    responsibilities: str | None = None,
+) -> str:
     """The text a job is represented by for semantic search.
 
     Title, company, and requirements rather than the full description: postings
     are padded with boilerplate about culture and benefits that is near-identical
     across companies, and including it pulls every job toward the same point in
     the space — which is exactly what makes semantic search useless.
+
+    Takes fields rather than a ``Job`` because the duplicate check at ingest
+    time has no ``Job`` yet — nothing is saved until the user confirms. Anything
+    comparing against a stored job embedding **must** build its probe here, or
+    it is measuring the distance between a full posting and a distilled one and
+    will conclude they are unrelated.
     """
-    parts = [job.title, company_name]
-    if job.seniority:
-        parts.append(job.seniority)
-    if job.location:
-        parts.append(job.location)
+    parts = [title, company_name]
+    if seniority:
+        parts.append(seniority)
+    if location:
+        parts.append(location)
     parts.extend(requirements)
-    if job.responsibilities:
-        parts.append(job.responsibilities[:1500])
+    if responsibilities:
+        parts.append(responsibilities[:1500])
     return " • ".join(p for p in parts if p)
 
 
@@ -132,7 +147,14 @@ async def embed_job(session: AsyncSession, job: Job) -> None:
         .all()
     )
 
-    content = job_embedding_text(job, company or "", requirements)
+    content = job_embedding_text(
+        title=job.title,
+        company_name=company,
+        seniority=job.seniority,
+        location=job.location,
+        requirements=requirements,
+        responsibilities=job.responsibilities,
+    )
 
     try:
         vectors = await embeddings.embedding_provider.embed_documents([content])

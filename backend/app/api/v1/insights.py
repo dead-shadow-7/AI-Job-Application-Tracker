@@ -36,6 +36,7 @@ class AnalyticsRead(BaseModel):
     funnel: list[FunnelStageRead] = Field(default_factory=list)
     by_platform: list[PlatformStatsRead] = Field(default_factory=list)
 
+    submitted: int = 0
     responses: int = 0
     response_rate: float | None = None
     median_days_to_response: float | None = None
@@ -94,6 +95,7 @@ async def analytics(user: CurrentUser, session: DbSession) -> AnalyticsRead:
             )
             for p in data.by_platform
         ],
+        submitted=data.submitted,
         responses=data.responses,
         response_rate=data.response_rate,
         median_days_to_response=data.median_days_to_response,

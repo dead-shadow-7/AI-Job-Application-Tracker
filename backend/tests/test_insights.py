@@ -98,7 +98,24 @@ async def test_saved_but_never_applied_rows_do_not_count_against_the_response_ra
     body = (await user.get("/api/v1/analytics")).json()
 
     assert body["total"] == 2
+    assert body["submitted"] == 1, "the shortlisted row is tracked but was never sent"
     assert body["response_rate"] == 1.0, "one submitted application, one response"
+
+
+async def test_the_response_rate_reports_its_own_denominator(client: AsyncClient) -> None:
+    """A percentage without its base cannot be read. `total` is the wrong base
+    and would understate the rate, so the count it was actually divided by is
+    returned alongside it."""
+    user = await Session(client).start()
+    applied = await user.create_application(company_name="Amazon", initial_event="applied")
+    await user.create_application(company_name="Razorpay", initial_event="applied")
+    await user.create_application(company_name="Zerodha", initial_event="saved")
+    await user.add_event(applied["id"], "recruiter_reply")
+
+    body = (await user.get("/api/v1/analytics")).json()
+
+    assert (body["responses"], body["submitted"]) == (1, 2)
+    assert body["response_rate"] == round(1 / 2, 3)
 
 
 async def test_a_follow_up_you_sent_is_not_a_response(client: AsyncClient) -> None:

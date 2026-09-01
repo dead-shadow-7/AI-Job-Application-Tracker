@@ -218,13 +218,14 @@ async def test_embedding_text_omits_boilerplate() -> None:
     point in the space, which is precisely what makes semantic search useless."""
     from app.services.applications import job_embedding_text
 
-    class FakeJob:
-        title = "Backend Engineer"
-        seniority = "senior"
-        location = "Pune"
-        responsibilities = "Build services."
-
-    content = job_embedding_text(FakeJob(), "Razorpay", ["5+ years Python", "Kafka"])
+    content = job_embedding_text(
+        title="Backend Engineer",
+        company_name="Razorpay",
+        seniority="senior",
+        location="Pune",
+        requirements=["5+ years Python", "Kafka"],
+        responsibilities="Build services.",
+    )
 
     assert "Backend Engineer" in content
     assert "Razorpay" in content

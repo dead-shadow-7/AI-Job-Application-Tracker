@@ -20,9 +20,9 @@ from app.api.deps import CurrentUser, DbSession
 from app.core.config import settings
 from app.core.exceptions import InvalidOperationError
 from app.schemas.extraction import ExtractedJob
-from app.schemas.ingest import IngestPreview, IngestRequest, JobDraft
+from app.schemas.ingest import DuplicateHint, IngestPreview, IngestRequest, JobDraft
 from app.schemas.job import RequirementIn
-from app.services.applications import content_hash
+from app.services.applications import content_hash, job_embedding_text
 from app.services.search import find_near_duplicate
 from app.services.skills import SkillResolution
 
@@ -102,7 +102,7 @@ async def ingest(payload: IngestRequest, user: CurrentUser, session: DbSession) 
         prompt_version=state["prompt_version"],
         tokens_used=sum(u.total_tokens for u in usage),
         latency_ms=sum(u.latency_ms for u in usage),
-        duplicate_of=await _find_duplicate(session, user.id, state["cleaned_text"]),
+        duplicate_of=await _find_duplicate(session, user.id, state["cleaned_text"], extracted),
     )
 
 
@@ -110,15 +110,43 @@ def _decimal(value: float | None) -> Decimal | None:
     return None if value is None else Decimal(str(value))
 
 
-async def _find_duplicate(session: AsyncSession, user_id: UUID, cleaned_text: str) -> UUID | None:
+async def _find_duplicate(
+    session: AsyncSession, user_id: UUID, cleaned_text: str, extracted: ExtractedJob
+) -> DuplicateHint | None:
     """Exact hash first, then embedding similarity.
 
     The hash catches pasting the same posting twice. The embedding catches what
     it cannot: the same role reposted with edited wording, or found on two
     boards with different boilerplate wrapped around it — which is the case
     that actually costs you a duplicate timeline.
+
+    The probe is built by ``job_embedding_text`` from the *extraction*, not from
+    the pasted text. Stored job vectors deliberately exclude the culture-and-
+    benefits padding, so comparing a raw posting against one measures the
+    distance between a full document and a distilled one and finds nothing —
+    which would leave the exact hash quietly doing all the work.
+
+    Which of the two fired is reported, not hidden: the near match is a
+    judgement and the review screen should say so.
     """
-    match = await find_near_duplicate(
-        session, user_id, cleaned_text, content_digest=content_hash(cleaned_text)
+    probe = job_embedding_text(
+        title=extracted.title,
+        company_name=extracted.company_name,
+        seniority=extracted.seniority,
+        location=extracted.location,
+        requirements=[r.text for r in extracted.requirements],
+        responsibilities=extracted.responsibilities,
     )
-    return match.application.id if match else None
+
+    match = await find_near_duplicate(
+        session, user_id, probe, content_digest=content_hash(cleaned_text)
+    )
+    if match is None:
+        return None
+
+    job = match.application.job
+    return DuplicateHint(
+        application_id=match.application.id,
+        label=f"{job.title} at {job.company.name}",
+        is_exact=match.is_exact,
+    )
