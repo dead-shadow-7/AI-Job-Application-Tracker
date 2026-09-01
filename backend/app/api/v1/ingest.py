@@ -12,7 +12,6 @@ from decimal import Decimal
 from uuid import UUID
 
 from fastapi import APIRouter
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.graphs.ingestion import run_ingestion
@@ -20,12 +19,11 @@ from app.agent.llm_client import llm_client
 from app.api.deps import CurrentUser, DbSession
 from app.core.config import settings
 from app.core.exceptions import InvalidOperationError
-from app.models.application import Application
-from app.models.job import Job
 from app.schemas.extraction import ExtractedJob
 from app.schemas.ingest import IngestPreview, IngestRequest, JobDraft
 from app.schemas.job import RequirementIn
 from app.services.applications import content_hash
+from app.services.search import find_near_duplicate
 from app.services.skills import SkillResolution
 
 logger = logging.getLogger(__name__)
@@ -113,21 +111,14 @@ def _decimal(value: float | None) -> Decimal | None:
 
 
 async def _find_duplicate(session: AsyncSession, user_id: UUID, cleaned_text: str) -> UUID | None:
-    """Exact-duplicate check on the normalised description.
+    """Exact hash first, then embedding similarity.
 
-    Catches the common case of pasting the same posting twice, or the same job
-    found on two boards. Near-duplicate detection over embeddings arrives in
-    Phase 3; this costs one indexed lookup and no tokens.
+    The hash catches pasting the same posting twice. The embedding catches what
+    it cannot: the same role reposted with edited wording, or found on two
+    boards with different boilerplate wrapped around it — which is the case
+    that actually costs you a duplicate timeline.
     """
-    digest = content_hash(cleaned_text)
-    if digest is None:
-        return None
-
-    return (
-        await session.execute(
-            select(Application.id)
-            .join(Job, Job.id == Application.job_id)
-            .where(Application.user_id == user_id, Job.content_hash == digest)
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+    match = await find_near_duplicate(
+        session, user_id, cleaned_text, content_digest=content_hash(cleaned_text)
+    )
+    return match.application.id if match else None

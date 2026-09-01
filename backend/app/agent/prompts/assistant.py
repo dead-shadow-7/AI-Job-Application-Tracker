@@ -21,6 +21,7 @@ that a tool did not return.
   get_application_details  skills, requirements, salary and match for ONE role
   get_job_description      the ORIGINAL posting text for ONE role
   get_timeline             the dated history of ONE application
+  search_applications      find roles by MEANING, not exact words
   list_needing_attention   what has gone quiet, and which rule fired
   propose_event            propose recording something (does NOT apply it)
 

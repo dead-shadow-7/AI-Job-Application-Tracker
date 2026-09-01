@@ -7,6 +7,7 @@ from app.api.v1 import (
     contacts,
     followups,
     ingest,
+    insights,
     matching,
     me,
     resumes,
@@ -22,3 +23,4 @@ api_router.include_router(resumes.router)
 api_router.include_router(matching.router)
 api_router.include_router(followups.router)
 api_router.include_router(agent.router)
+api_router.include_router(insights.router)

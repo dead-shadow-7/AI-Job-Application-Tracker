@@ -29,6 +29,7 @@ from app.services.applications import list_applications
 from app.services.events import get_application
 from app.services.followups import find_stale_applications
 from app.services.resolver import resolve_application
+from app.services.search import search_applications
 
 TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
@@ -111,6 +112,24 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     {
         "type": "function",
         "function": {
+            "name": "search_applications",
+            "description": (
+                "Find tracked applications by meaning rather than exact words — "
+                "'the RAG roles', 'anything involving infrastructure'. Use when the "
+                "user describes a kind of job rather than naming one."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "What kind of role they described."}
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "propose_event",
             "description": (
                 "Propose recording something on an application's timeline. This does "
@@ -168,6 +187,8 @@ async def run_tool(
         return await _timeline(session, user_id, arguments.get("query", "")), None
     if name == "get_job_description":
         return await _description(session, user_id, arguments.get("query", "")), None
+    if name == "search_applications":
+        return await _search(session, user_id, arguments.get("query", "")), None
     if name == "list_needing_attention":
         return await _needing_attention(session, user_id), None
     if name == "propose_event":
@@ -303,6 +324,17 @@ async def _description(session: AsyncSession, user_id: uuid.UUID, query: str) ->
         text = text[:MAX_DESCRIPTION_CHARS] + "\n\n[truncated — this is the first part only]"
 
     return f"Job description for {job.title} at {job.company.name}:\n\n{text}"
+
+
+async def _search(session: AsyncSession, user_id: uuid.UUID, query: str) -> str:
+    hits = await search_applications(session, user_id, query)
+    if not hits:
+        return f"Nothing they track resembles {query!r}."
+    return "\n".join(
+        f"{h.application.job.title} at {h.application.job.company.name} "
+        f"(status {h.application.current_status}, similarity {h.similarity})"
+        for h in hits
+    )
 
 
 async def _needing_attention(session: AsyncSession, user_id: uuid.UUID) -> str:

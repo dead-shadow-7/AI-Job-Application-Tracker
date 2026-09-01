@@ -193,9 +193,25 @@ class StubEmbeddings:
         self.queries_embedded = 0
 
     def _vector(self, value: str) -> list[float]:
-        digest = hashlib.sha256(value.encode()).digest()
-        raw = [(digest[i % len(digest)] / 255.0) - 0.5 for i in range(self.dimension)]
-        norm = sum(x * x for x in raw) ** 0.5 or 1.0
+        """A bag-of-words vector: each distinct word lights one dimension.
+
+        Not semantic — "car" and "automobile" land nowhere near each other —
+        but text that *shares words* produces vectors that are genuinely close,
+        which is enough to exercise thresholds, ordering and scoping. A pure
+        hash of the whole string would make every pair equidistant and any
+        search test would assert nothing.
+
+        Retrieval quality is a property of bge-small and is verified by hand
+        against the real model, not pinned here.
+        """
+        raw = [0.0] * self.dimension
+        for word in {w for w in value.lower().split() if len(w) > 2}:
+            index = int.from_bytes(hashlib.sha256(word.encode()).digest()[:4], "big")
+            raw[index % self.dimension] += 1.0
+
+        norm = sum(x * x for x in raw) ** 0.5
+        if norm == 0:
+            return [1.0] + [0.0] * (self.dimension - 1)
         return [x / norm for x in raw]
 
     async def embed_documents(self, texts: list[str]) -> list[list[float]]:
