@@ -35,6 +35,7 @@ from app.domain.enums import EventSource, EventType, MessageRole
 from app.models.application import Application, InterviewStage
 from app.schemas.agent import (
     ActionPreview,
+    ChatAttachment,
     ChatRequest,
     ChatResponse,
     ConfirmCreateApplication,
@@ -80,6 +81,7 @@ async def chat(payload: ChatRequest, user: CurrentUser, session: DbSession) -> C
     return ChatResponse(
         message=result.message,
         pending_action=ActionPreview(**result.proposal) if result.proposal else None,
+        attachments=[ChatAttachment(**a) for a in result.attachments],
         model=settings.extraction_model,
         prompt_version=ASSISTANT_PROMPT_VERSION,
         tools_used=result.tools_used,

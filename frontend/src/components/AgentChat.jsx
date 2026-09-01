@@ -36,6 +36,7 @@ export function AgentChat({ open, onClose }) {
           role: 'agent',
           text: reply.message,
           action: reply.pending_action,
+          attachments: reply.attachments ?? [],
           tools: reply.tools_used ?? [],
         },
       ]),
@@ -120,6 +121,27 @@ export function AgentChat({ open, onClose }) {
             >
               {turn.text}
             </div>
+
+            {/* Documents come from the database, not from the model's output.
+                Asked to relay a job description the model rewrote it — 3,400
+                characters in, 1,900 out — and sometimes said "here's the JD"
+                and reproduced none of it. Rendering the stored text directly is
+                the only way it arrives whole. Open by default: asking for the
+                JD means wanting to read it, not to click once more. */}
+            {turn.attachments?.map((attachment) => (
+              <details
+                key={attachment.title}
+                open
+                className="mt-2 rounded-lg border border-border-subtle bg-surface-muted text-left"
+              >
+                <summary className="cursor-pointer px-3 py-2 text-xs font-medium">
+                  {attachment.title}
+                </summary>
+                <pre className="max-h-96 overflow-auto whitespace-pre-wrap wrap-break-word border-t border-border-subtle px-3 py-2 font-sans text-xs leading-relaxed">
+                  {attachment.body}
+                </pre>
+              </details>
+            ))}
 
             {/* Which tools ran, so an answer can be traced to its source rather
                 than taken on trust. Quiet enough to ignore when you don't care. */}

@@ -81,9 +81,25 @@ class ActionPreview(BaseModel):
     matched_on: str | None = None
 
 
+class ChatAttachment(BaseModel):
+    """A stored document shown alongside the reply, not inside it.
+
+    Rendered by the client from the database text. It never passes through the
+    model's output, which is the point: asked to relay a job description the
+    model rewrites it, and sometimes announces it without reproducing anything
+    at all. Nothing here is generated — a drafted follow-up belongs in `message`
+    because the model genuinely wrote it.
+    """
+
+    kind: Literal["job_description"]
+    title: str
+    body: str
+
+
 class ChatResponse(BaseModel):
     message: str
     pending_action: ActionPreview | None = None
+    attachments: list[ChatAttachment] = Field(default_factory=list)
 
     model: str | None = None
     prompt_version: str | None = None

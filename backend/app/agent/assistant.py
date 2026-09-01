@@ -48,6 +48,11 @@ KEEP_FIRST_PROPOSAL = True
 class AssistantResult:
     message: str
     proposal: dict[str, Any] | None = None
+    # Documents a tool pulled out of the database, shown to the user as they are
+    # stored. They never pass through the model's output, which is the only way
+    # to guarantee the user sees the posting rather than the model's impression
+    # of it.
+    attachments: list[dict[str, Any]] = field(default_factory=list)
     tools_used: list[str] = field(default_factory=list)
     total_tokens: int = 0
 
@@ -94,6 +99,7 @@ async def run_assistant(
     ]
 
     proposal: dict[str, Any] | None = None
+    attachments: list[dict[str, Any]] = []
     tools_used: list[str] = []
     total_tokens = 0
     reply_text = ""
@@ -118,12 +124,16 @@ async def run_assistant(
             except json.JSONDecodeError:
                 arguments = {}
 
-            output, maybe_proposal = await run_tool(name, arguments, session, user_id)
+            result = await run_tool(name, arguments, session, user_id)
             tools_used.append(name)
-            if maybe_proposal is not None and not (proposal and KEEP_FIRST_PROPOSAL):
-                proposal = maybe_proposal
+            if result.proposal is not None and not (proposal and KEEP_FIRST_PROPOSAL):
+                proposal = result.proposal
+            # Asking twice in one turn is common when the model retries a query;
+            # showing the same posting twice is not.
+            if result.attachment is not None and result.attachment not in attachments:
+                attachments.append(result.attachment)
 
-            messages.append({"role": "tool", "tool_call_id": call["id"], "content": output})
+            messages.append({"role": "tool", "tool_call_id": call["id"], "content": result.output})
     else:
         logger.warning("Assistant hit the round limit for user %s", user_id)
         reply_text = (
@@ -140,6 +150,7 @@ async def run_assistant(
     return AssistantResult(
         message=reply_text,
         proposal=proposal,
+        attachments=attachments,
         tools_used=tools_used,
         total_tokens=total_tokens,
     )

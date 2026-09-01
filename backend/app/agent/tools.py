@@ -23,6 +23,7 @@ three full detail blocks apiece.
 
 import uuid
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
@@ -281,13 +282,31 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
 ]
 
 
-Handler = Callable[[AsyncSession, uuid.UUID, dict[str, Any]], Awaitable[str]]
+@dataclass(frozen=True, slots=True)
+class ToolResult:
+    """What a tool produced, split by who it is for.
+
+    ``output`` goes to the model. ``attachment`` goes straight to the user,
+    bypassing it entirely — which is the only way to hand over a stored document
+    intact. Asked to relay a 3,400-character job description, the model rewrote
+    it down to 1,900 and sometimes replied with nothing but "here's the job
+    description", because re-emitting a long document verbatim is not something
+    it reliably does, and paying output tokens to echo text already in hand is
+    waste even when it works.
+    """
+
+    output: str
+    proposal: dict[str, Any] | None = None
+    attachment: dict[str, Any] | None = None
+
+
+Handler = Callable[[AsyncSession, uuid.UUID, dict[str, Any]], Awaitable[str | ToolResult]]
 
 
 async def run_tool(
     name: str, arguments: dict[str, Any], session: AsyncSession, user_id: uuid.UUID
-) -> tuple[str, dict[str, Any] | None]:
-    """Execute a tool. Returns (text for the model, proposal if any).
+) -> ToolResult:
+    """Execute a tool.
 
     Unknown names return an error string rather than raising: a model that
     hallucinates a tool should be told so and allowed to correct itself, not
@@ -296,13 +315,16 @@ async def run_tool(
     proposer = _PROPOSERS.get(name)
     if proposer is not None:
         text, proposal = await proposer(session, user_id, arguments)
-        return _clip(text), proposal
+        return ToolResult(output=_clip(text), proposal=proposal)
 
     reader = _READERS.get(name)
     if reader is None:
-        return f"No such tool: {name}. Use one of the tools you were given.", None
+        return ToolResult(output=f"No such tool: {name}. Use one of the tools you were given.")
 
-    return _clip(await reader(session, user_id, arguments)), None
+    produced = await reader(session, user_id, arguments)
+    if isinstance(produced, ToolResult):
+        return ToolResult(output=_clip(produced.output), attachment=produced.attachment)
+    return ToolResult(output=_clip(produced))
 
 
 def _clip(text: str) -> str:
@@ -407,14 +429,22 @@ async def _timeline(session: AsyncSession, user_id: uuid.UUID, args: dict[str, A
     return "\n".join(lines)
 
 
-# A pasted posting can run to tens of thousands of characters, so this is cut
-# harder than the generic clip: the description is the one tool output that is
-# routinely long enough to matter on its own.
+# A pasted posting can run to tens of thousands of characters, so the model's
+# copy is cut harder than the generic clip. The user's copy is not cut at all —
+# it does not travel through the context window.
 MAX_DESCRIPTION_CHARS = 5000
 
 
-async def _description(session: AsyncSession, user_id: uuid.UUID, args: dict[str, Any]) -> str:
+async def _description(
+    session: AsyncSession, user_id: uuid.UUID, args: dict[str, Any]
+) -> str | ToolResult:
     """The posting as written.
+
+    Returned twice, deliberately. The attachment is the whole stored text and
+    goes to the user untouched; the model gets a copy so it can answer questions
+    about the posting, and is told not to repeat it. Making the model relay the
+    document was the bug: it rewrote a 3,400-character description down to
+    1,900, and sometimes announced it without reproducing anything.
 
     Kept apart from get_application_details deliberately. That tool returns a
     structured summary, and merging the two would put a full posting into every
@@ -425,17 +455,27 @@ async def _description(session: AsyncSession, user_id: uuid.UUID, args: dict[str
         return problem or "No such application."
 
     job = application.job
+    label = f"{job.title} at {job.company.name}"
     if not job.description:
         return (
-            f"No description was stored for {job.title} at {job.company.name}. "
+            f"No description was stored for {label}. "
             "It was probably entered by hand rather than pasted."
         )
 
-    text = job.description
-    if len(text) > MAX_DESCRIPTION_CHARS:
-        text = text[:MAX_DESCRIPTION_CHARS] + "\n\n[truncated — this is the first part only]"
+    for_model = job.description
+    if len(for_model) > MAX_DESCRIPTION_CHARS:
+        for_model = for_model[:MAX_DESCRIPTION_CHARS] + "\n\n[truncated for you only]"
 
-    return f"Job description for {job.title} at {job.company.name}:\n\n{text}"
+    return ToolResult(
+        output=(
+            f"The full job description for {label} is ALREADY BEING SHOWN to the user, "
+            "in full, below your reply. Do NOT reproduce, quote at length, or summarise "
+            "it unless they asked a specific question about it — say one line to "
+            "introduce it and stop. A copy follows so you can answer questions about "
+            f"it:\n\n{for_model}"
+        ),
+        attachment={"kind": "job_description", "title": label, "body": job.description},
+    )
 
 
 async def _search(session: AsyncSession, user_id: uuid.UUID, args: dict[str, Any]) -> str:

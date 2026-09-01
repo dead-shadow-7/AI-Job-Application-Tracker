@@ -525,6 +525,78 @@ async def test_a_brief_admits_when_nothing_was_scored(client: AsyncClient, llm) 
     assert "do not guess" in stub.tool_output().lower()
 
 
+# --- Documents ---------------------------------------------------------------
+
+
+async def test_a_job_description_reaches_the_user_without_passing_through_the_model(
+    client: AsyncClient, llm
+) -> None:
+    """The bug: asked to relay a 3,400-character posting the model rewrote it to
+    1,900, and sometimes replied "here's the job description" and reproduced
+    none of it. A document cannot be re-emitted verbatim on demand, so it does
+    not go through the model's output at all."""
+    posting = "Key Responsibilities\n" + "\n".join(f"- Build subsystem {i}" for i in range(200))
+    stub = llm(
+        calls("get_job_description", query="Amazon"),
+        says("Here is the posting for the backend role."),
+    )
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon", description=posting)
+
+    body = (await user.post("/api/v1/agent/chat", {"message": "share the JD"})).json()
+
+    attachment = body["attachments"][0]
+    assert attachment["kind"] == "job_description"
+    assert attachment["body"] == posting, "the user gets the stored text, whole and unedited"
+    assert "Amazon" in attachment["title"]
+    # And the model is told not to duplicate what is already on screen.
+    assert "ALREADY BEING SHOWN" in stub.tool_output()
+    assert "Do NOT reproduce" in stub.tool_output()
+
+
+async def test_the_model_still_receives_the_posting_to_answer_questions_about(
+    client: AsyncClient, llm
+) -> None:
+    """Attaching it is not enough on its own — "what does it say about
+    Kubernetes" needs the text in the context window, so it is sent as well."""
+    stub = llm(calls("get_job_description", query="Amazon"), says("It asks for Kubernetes."))
+    user = await Session(client).start()
+    await user.create_application(
+        company_name="Amazon", description="You will operate Kubernetes clusters."
+    )
+
+    await user.post("/api/v1/agent/chat", {"message": "does it mention kubernetes?"})
+
+    assert "operate Kubernetes clusters" in stub.tool_output()
+
+
+async def test_a_posting_is_attached_once_even_if_fetched_twice(client: AsyncClient, llm) -> None:
+    """Models retry a lookup with a reworded query. Showing the same document
+    twice makes the drawer look broken."""
+    llm(
+        calls("get_job_description", query="Amazon"),
+        calls("get_job_description", query="the Amazon one"),
+        says("Here it is."),
+    )
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon", description="Build services.")
+
+    body = (await user.post("/api/v1/agent/chat", {"message": "the JD please"})).json()
+
+    assert len(body["attachments"]) == 1
+
+
+async def test_nothing_is_attached_when_there_is_no_description(client: AsyncClient, llm) -> None:
+    """An empty document block would read as a posting that failed to load."""
+    llm(calls("get_job_description", query="Amazon"), says("None was stored."))
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon", description=None)
+
+    body = (await user.post("/api/v1/agent/chat", {"message": "the JD please"})).json()
+
+    assert body["attachments"] == []
+
+
 # --- Wiring ----------------------------------------------------------------
 
 
