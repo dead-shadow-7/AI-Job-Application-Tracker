@@ -267,9 +267,13 @@ def _apply_filters(
     if work_mode:
         stmt = stmt.where(Job.work_mode == work_mode)
     if search:
-        # ILIKE over title and company name. pg_trgm indexes make this fast
-        # enough well past the volume one person's job search will ever reach;
-        # full-text search would be premature.
+        # ILIKE over title and company name, and it does not scan `companies`
+        # despite the leading wildcard: the user_id filter above bounds this to
+        # one person's applications, so the planner drives from `jobs` and hits
+        # `companies` by primary key. Measured at 100k companies with 60
+        # applications, 0.17ms — a trigram index changes nothing here and the
+        # planner would not use it. The unscoped search in catalog.py is the
+        # one that scans; full-text search would be premature for both.
         pattern = f"%{search.strip()}%"
         stmt = stmt.where(or_(Job.title.ilike(pattern), Company.name.ilike(pattern)))
     return stmt

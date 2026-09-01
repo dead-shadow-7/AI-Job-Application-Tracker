@@ -100,9 +100,10 @@ embeddings run locally rather than through the same provider.
 
 The LLM is provider-neutral because the budgets differ by orders of magnitude.
 Groq is fastest (~2–4s) but its free tier allows 8,000 tokens/minute **and**
-200,000 per day; since the assistant's tool schemas cost ~2,400 tokens per
-round, roughly forty messages exhaust a day, and the daily cap cannot be waited
-out. Gemini caps on requests rather than tokens — roomier, slower. AI Credits is
+200,000 per day; measured against Groq's own billed token count the assistant's
+fixed prefix is ~3,320 per round, so a two-round turn costs ~7,200–8,500 and
+roughly twenty to twenty-five messages exhaust a day, and the daily cap cannot
+be waited out. Gemini caps on requests rather than tokens — roomier, slower. AI Credits is
 paid (INR/UPI, ~10% over list) with no token ceiling at all, which is why it is
 the default. All three speak the OpenAI dialect, so switching is a key, a base
 URL, and a model.
@@ -128,9 +129,13 @@ turn against 23.
 
 In absolute terms the whole spread is small change at personal-project volume,
 so none of it was worth trading a wrong salary for. Prompt caching then halves
-the prompt cost again — the system prompt and tool schemas are ~3,100 tokens of
+the prompt cost again — the system prompt and tool schemas are ~3,320 tokens of
 identical prefix on every round, and the variable parts come after it, so the
-cacheable span is as long as it can be.
+cacheable span is as long as it can be *within* a turn. Across turns it is not:
+history is trimmed newest-first against a rolling budget, so once the window
+fills, the message right after the system prompt changes every turn and the
+cacheable span collapses back to the system prompt alone. `cache_hit_rate` on
+the assistant's debug line is where that shows up.
 
 ## Getting started
 
