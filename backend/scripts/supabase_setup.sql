@@ -1,12 +1,18 @@
 -- Run once against a fresh Supabase project, in the SQL Editor.
 --
--- Supabase's `postgres` user is a SUPERUSER, and superusers bypass row level
--- security unconditionally — FORCE ROW LEVEL SECURITY does not cover them.
--- Connecting the API as `postgres` would leave every tenant isolation policy
+-- Supabase's `postgres` user is not a superuser, but it does carry BYPASSRLS,
+-- which bypasses row level security just as completely. FORCE ROW LEVEL
+-- SECURITY does not cover it either. Connecting the API as `postgres` would
+-- leave every tenant isolation policy
 -- decorative while the whole test suite still passed. So the runtime role is
 -- created here, exactly as scripts/init-db.sql does locally.
 --
 -- Change the password before running, and put the same value in DATABASE_URL.
+--
+-- Note the pooler username format: DATABASE_URL must use `app_user.<project-ref>`,
+-- not a bare `app_user`. Supavisor routes tenants by that suffix and refuses a
+-- bare role name with "no tenant identifier provided", which reads like an
+-- authentication failure and is not.
 
 DO $$
 BEGIN

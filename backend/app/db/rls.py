@@ -50,19 +50,35 @@ def disable_user_isolation(table: str, *, role: str = RUNTIME_ROLE) -> list[str]
     ]
 
 
+def share_table(table: str, *, writable: bool = True, role: str = RUNTIME_ROLE) -> list[str]:
+    """For non-tenant tables: company records, job postings, the skill taxonomy.
+
+    These carry nothing private. A job description is information the employer
+    published, and a per-user copy of every posting would break deduplication
+    and cross-company analytics. What *is* private — that you applied, and what
+    happened next — lives on the tenant-scoped tables.
+
+    RLS is enabled with an explicit permissive policy rather than left off.
+    That is not ceremony: Supabase enables RLS by default on every table in the
+    `public` schema, and **RLS enabled with no policy denies everything**. A
+    migration that merely granted SELECT would leave the runtime role able to
+    read exactly zero rows there while working perfectly against a local
+    Postgres, which had RLS off. Stating the policy makes both environments
+    agree, and records that the sharing is deliberate rather than an oversight.
+    """
+    verbs = "SELECT, INSERT, UPDATE, DELETE" if writable else "SELECT"
+    return [
+        f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY",
+        f"DROP POLICY IF EXISTS {table}_shared_access ON {table}",
+        f"CREATE POLICY {table}_shared_access ON {table} USING (true) WITH CHECK (true)",
+        f"GRANT {verbs} ON {table} TO {role}",
+    ]
+
+
+# Retained under the old names so existing migrations keep working unchanged.
 def grant_readonly_reference(table: str, *, role: str = RUNTIME_ROLE) -> list[str]:
-    """For curated reference tables (the skill taxonomy) that every user reads
-    but only migrations write."""
-    return [f"GRANT SELECT ON {table} TO {role}"]
+    return share_table(table, writable=False, role=role)
 
 
 def grant_shared_table(table: str, *, role: str = RUNTIME_ROLE) -> list[str]:
-    """For shared, non-tenant tables that users create rows in — companies and
-    job postings.
-
-    Deliberately no RLS: a job description is public information the employer
-    published, and a per-user copy of every posting would break deduplication
-    and cross-company analytics. What is private — that *you* applied, and what
-    happened — lives on the tenant-scoped tables instead.
-    """
-    return [f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO {role}"]
+    return share_table(table, writable=True, role=role)

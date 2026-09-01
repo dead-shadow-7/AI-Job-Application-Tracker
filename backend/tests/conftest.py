@@ -17,15 +17,30 @@ def _swap_database(url: str, name: str) -> str:
     return urlunsplit(parts._replace(path=f"/{name}"))
 
 
-# Tests exercise the same two-role split as production: the app connects as the
-# NOBYPASSRLS runtime role, and only the owner role creates/migrates/truncates.
-# Running the suite as the owner would make every isolation test pass vacuously.
+# Bound to the local container, and deliberately NOT read from DATABASE_URL.
+#
+# This suite drops and recreates its database on every run and truncates tables
+# between tests. Inheriting the application's connection string would aim that
+# at whatever the app is pointed at — which, once deployment starts, is real
+# data. The override is a separate TEST_* variable so pointing the app
+# elsewhere can never redirect the tests.
+#
+# The two-role split is preserved: the app connects as the NOBYPASSRLS runtime
+# role, only the owner creates/migrates/truncates. Running the suite as the
+# owner would make every isolation test pass vacuously.
 _OWNER_URL = os.environ.get(
-    "MIGRATION_DATABASE_URL", "postgresql+asyncpg://jobtracker:jobtracker@db:5432/jobtracker"
+    "TEST_MIGRATION_DATABASE_URL", "postgresql+asyncpg://jobtracker:jobtracker@db:5432/jobtracker"
 )
 _APP_URL = os.environ.get(
-    "DATABASE_URL", "postgresql+asyncpg://app_user:app_password@db:5432/jobtracker"
+    "TEST_DATABASE_URL", "postgresql+asyncpg://app_user:app_password@db:5432/jobtracker"
 )
+
+if "supabase" in _OWNER_URL or "supabase" in _APP_URL:
+    raise RuntimeError(
+        "The test database points at Supabase. This suite drops databases and "
+        "truncates tables; it must only ever run against a disposable local "
+        "Postgres. Unset TEST_DATABASE_URL / TEST_MIGRATION_DATABASE_URL."
+    )
 OWNER_TEST_URL = _swap_database(_OWNER_URL, TEST_DB_NAME)
 
 os.environ["DATABASE_URL"] = _swap_database(_APP_URL, TEST_DB_NAME)

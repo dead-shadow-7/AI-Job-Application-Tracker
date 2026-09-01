@@ -23,11 +23,18 @@ services:
       context: ./backend
     env_file:
       - .env
+    # DATABASE_URL and MIGRATION_DATABASE_URL come from .env and are NOT
+    # overridden here, so the running app can be pointed at Supabase without
+    # editing this file.
+    #
+    # The test suite does not read them — see backend/tests/conftest.py. It
+    # binds to the local container explicitly, because it drops and recreates
+    # its database on every run and inheriting a remote URL would aim that at
+    # real data.
     environment:
-      # Override so the container reaches the db service, not localhost.
-      # app_user is NOBYPASSRLS — see backend/scripts/init-db.sql.
-      DATABASE_URL: postgresql+asyncpg://app_user:app_password@db:5432/jobtracker
-      MIGRATION_DATABASE_URL: postgresql+asyncpg://jobtracker:jobtracker@db:5432/jobtracker
+      # Local fallbacks only, used when .env is absent.
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://app_user:app_password@db:5432/jobtracker}
+      MIGRATION_DATABASE_URL: ${MIGRATION_DATABASE_URL:-postgresql+asyncpg://jobtracker:jobtracker@db:5432/jobtracker}
     ports:
       - "8000:8000"
     volumes:

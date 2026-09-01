@@ -33,10 +33,14 @@ jobs:
           --health-retries 10
 
     env:
+      # TEST_* rather than DATABASE_URL: the suite binds to its own disposable
+      # database explicitly, so pointing the application at a deployed one can
+      # never redirect tests that drop and truncate.
+      #
       # Two roles, mirroring production. Running the suite as the superuser
       # would let every RLS isolation test pass without proving anything.
-      DATABASE_URL: postgresql+asyncpg://app_user:app_password@localhost:5432/jobtracker
-      MIGRATION_DATABASE_URL: postgresql+asyncpg://jobtracker:jobtracker@localhost:5432/jobtracker
+      TEST_DATABASE_URL: postgresql+asyncpg://app_user:app_password@localhost:5432/jobtracker
+      TEST_MIGRATION_DATABASE_URL: postgresql+asyncpg://jobtracker:jobtracker@localhost:5432/jobtracker
       ENVIRONMENT: ci
 
     steps:
