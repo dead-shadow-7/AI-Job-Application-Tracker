@@ -15,7 +15,7 @@ async def test_create_with_inline_job_resolves_company_and_skills(client: AsyncC
     application = await user.create_application()
 
     job = application["job"]
-    assert job["company"]["name"] == "Setoo"
+    assert job["company"]["name"] == "Amazon"
     assert job["title"] == "Backend Engineer"
     assert {r["kind"] for r in job["requirements"]} == {"must", "nice"}
     assert {s["skill"]["slug"] for s in job["skills"]} == {"python", "postgresql"}
@@ -109,7 +109,7 @@ async def test_priority_and_notes_are_editable(client: AsyncClient) -> None:
 
 async def test_list_filters_by_status_and_search(client: AsyncClient) -> None:
     user = await Session(client).start()
-    await user.create_application(company_name="Setoo", title="Backend Engineer")
+    await user.create_application(company_name="Amazon", title="Backend Engineer")
     await user.create_application(
         company_name="Razorpay", title="ML Engineer", initial_event="applied"
     )
@@ -127,7 +127,7 @@ async def test_list_filters_by_status_and_search(client: AsyncClient) -> None:
 
 async def test_active_only_excludes_terminal_statuses(client: AsyncClient) -> None:
     user = await Session(client).start()
-    live = await user.create_application(company_name="Setoo", initial_event="applied")
+    live = await user.create_application(company_name="Amazon", initial_event="applied")
     dead = await user.create_application(company_name="Zerodha", initial_event="applied")
     await user.add_event(dead["id"], "rejected")
 
@@ -168,7 +168,7 @@ async def test_days_since_activity_is_computed(client: AsyncClient) -> None:
 async def test_stats_counts_active_and_stale(client: AsyncClient) -> None:
     user = await Session(client).start()
     await user.create_application(
-        company_name="Setoo", initial_event="applied", occurred_at=iso(days_ago=14)
+        company_name="Amazon", initial_event="applied", occurred_at=iso(days_ago=14)
     )
     await user.create_application(
         company_name="Razorpay", initial_event="applied", occurred_at=iso(days_ago=1)

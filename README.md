@@ -2,7 +2,7 @@
 
 Replaces a manually-maintained job-application spreadsheet. Paste a job
 description; an LLM extracts a structured record, scores it against your resume,
-and an event-sourced timeline lets an agent tell you *"Setoo has been silent 7
+and an event-sourced timeline lets an agent tell you *"Amazon has been silent 7
 days since the HR screening — a follow-up is due."*
 
 **Status: Phase 3 complete.** Paste a job description, get a structured record,

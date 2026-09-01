@@ -15,7 +15,7 @@ from tests.conftest import auth_headers, make_token
 
 def job_payload(**overrides: Any) -> dict[str, Any]:
     payload: dict[str, Any] = {
-        "company_name": "Setoo",
+        "company_name": "Amazon",
         "title": "Backend Engineer",
         "work_mode": "remote",
         "seniority": "mid",

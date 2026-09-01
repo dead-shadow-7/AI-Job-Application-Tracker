@@ -23,7 +23,7 @@ from tests.factories import Session
         ("Zoho Corporation", "zoho"),
         ("Freshworks Technologies Pvt. Ltd.", "freshworks"),
         ("Café Coffee Day", "cafe coffee day"),
-        ("Setoo", "setoo"),
+        ("Amazon", "amazon"),
     ],
 )
 def test_normalization_collapses_legal_suffixes(raw: str, expected: str) -> None:

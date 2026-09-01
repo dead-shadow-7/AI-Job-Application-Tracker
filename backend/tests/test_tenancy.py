@@ -19,7 +19,7 @@ from tests.factories import Session
 async def test_applications_are_invisible_across_users(client: AsyncClient) -> None:
     alice = await Session(client, "alice@example.com").start()
     bob = await Session(client, "bob@example.com").start()
-    await alice.create_application(company_name="Setoo")
+    await alice.create_application(company_name="Amazon")
 
     bob_list = (await bob.get("/api/v1/applications")).json()
 
@@ -90,7 +90,7 @@ async def test_database_refuses_cross_tenant_event_reads(client: AsyncClient) ->
     """Below the API: even raw SQL with no WHERE clause sees only one tenant."""
     alice = await Session(client, "alice@example.com").start()
     bob = await Session(client, "bob@example.com").start()
-    await alice.create_application(company_name="Setoo")
+    await alice.create_application(company_name="Amazon")
     await bob.create_application(company_name="Razorpay")
 
     async for session in open_user_session(bob.user_id):

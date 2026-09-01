@@ -114,7 +114,7 @@ export function NewApplication() {
         <section className="space-y-4 rounded-xl border border-border-subtle bg-surface p-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Company">
-              <input required value={form.company_name} onChange={set('company_name')} className={FIELD} placeholder="Setoo" />
+              <input required value={form.company_name} onChange={set('company_name')} className={FIELD} placeholder="Amazon" />
             </Field>
             <Field label="Role">
               <input required value={form.title} onChange={set('title')} className={FIELD} placeholder="Backend Engineer" />
