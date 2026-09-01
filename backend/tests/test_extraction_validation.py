@@ -210,3 +210,47 @@ def test_non_iso_currency_is_cleared() -> None:
 
     assert extracted.salary.currency is None
     assert any("ISO" in w for w in report.warnings)
+
+
+# --- Strict-schema generation ----------------------------------------------
+
+
+def test_generated_schemas_contain_no_refs() -> None:
+    """Groq's strict validator does not resolve $ref.
+
+    An optional enum field becomes anyOf: [{$ref: ...}, {type: null}], and
+    because the validator cannot see inside the ref it cannot tell the branches
+    apart — it rejects the whole request with "anyOf branches must be
+    disambiguated". That failure only appears against the live API, so this
+    asserts the property directly rather than waiting to be surprised by it.
+    """
+    import json
+
+    from app.schemas.agent import AgentReply
+    from app.schemas.extraction import ExtractedJob, to_strict_json_schema
+    from app.schemas.matching import RubricJudgment
+
+    for model in (ExtractedJob, AgentReply, RubricJudgment):
+        rendered = json.dumps(to_strict_json_schema(model))
+        assert "$ref" not in rendered, f"{model.__name__} still contains a $ref"
+        assert "$defs" not in rendered, f"{model.__name__} still contains $defs"
+
+
+def test_every_object_in_a_schema_is_closed_and_fully_required() -> None:
+    """Strict mode demands both, on nested objects as well as the root."""
+    from app.schemas.agent import AgentReply
+    from app.schemas.extraction import ExtractedJob, to_strict_json_schema
+
+    def walk(node: object) -> None:
+        if isinstance(node, dict):
+            if node.get("type") == "object" and "properties" in node:
+                assert node.get("additionalProperties") is False
+                assert set(node["required"]) == set(node["properties"])
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(to_strict_json_schema(ExtractedJob))
+    walk(to_strict_json_schema(AgentReply))

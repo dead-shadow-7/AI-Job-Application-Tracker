@@ -133,16 +133,52 @@ class ExtractedJob(BaseModel):
 def to_strict_json_schema(model: type[BaseModel]) -> dict[str, Any]:
     """Render a Pydantic model as a Groq/OpenAI strict-mode JSON Schema.
 
-    Pydantic emits a schema that is nearly right; strict mode additionally
-    demands that every object be closed (``additionalProperties: false``) and
-    list every property in ``required``. Both are applied recursively, including
-    into ``$defs``, so nested models are covered.
+    Two transforms, both required by strict mode:
+
+    1. Every object is closed (``additionalProperties: false``) and lists all
+       its properties in ``required``.
+    2. Every ``$ref`` is inlined and ``$defs`` dropped.
+
+    The second is not cosmetic. Pydantic emits enum *classes* and nested models
+    as ``$ref`` entries, so an optional enum field becomes
+    ``anyOf: [{$ref: ...}, {type: null}]`` — and Groq's validator does not
+    resolve refs, so it cannot tell the branches apart and rejects the whole
+    schema with "anyOf branches must be disambiguated". Inlining makes each
+    branch self-describing.
+
+    Optional fields typed with ``Literal[...]`` never hit this, because Pydantic
+    inlines those already; it is specifically ``SomeEnum | None`` that breaks.
+    Rather than ban enum classes in schemas, they are flattened here.
     """
     schema = model.model_json_schema()
+    definitions = schema.pop("$defs", {})
+    schema = _inline_refs(schema, definitions)
     _tighten(schema)
-    for definition in schema.get("$defs", {}).values():
-        _tighten(definition)
     return schema
+
+
+def _inline_refs(node: Any, definitions: dict[str, Any], depth: int = 0) -> Any:
+    """Replace ``$ref`` nodes with the definitions they point at.
+
+    Depth-bounded rather than cycle-tracking: these schemas describe extraction
+    payloads and are not recursive, and a bound fails loudly on a self-
+    referencing model instead of hanging the request.
+    """
+    if depth > 12:
+        raise ValueError("Schema nests too deeply to inline; is a model self-referencing?")
+
+    if isinstance(node, dict):
+        ref = node.get("$ref")
+        if isinstance(ref, str) and ref.startswith("#/$defs/"):
+            target = definitions.get(ref.removeprefix("#/$defs/"), {})
+            merged = {**target, **{k: v for k, v in node.items() if k != "$ref"}}
+            return _inline_refs(merged, definitions, depth + 1)
+        return {k: _inline_refs(v, definitions, depth + 1) for k, v in node.items()}
+
+    if isinstance(node, list):
+        return [_inline_refs(item, definitions, depth + 1) for item in node]
+
+    return node
 
 
 def _tighten(node: Any) -> None:
