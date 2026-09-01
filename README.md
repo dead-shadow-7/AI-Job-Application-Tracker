@@ -5,8 +5,8 @@ description; an LLM extracts a structured record, scores it against your resume,
 and an event-sourced timeline lets an agent tell you *"Amazon has been silent 7
 days since the HR screening — a follow-up is due."*
 
-**Status: Phase 3 complete.** Paste a job description, get a structured record,
-and score it against your resume with a breakdown you can argue with.
+**Status: Phase 4 complete.** The tracker now tells you what has gone quiet, and
+an assistant proposes changes you confirm.
 
 ## Stack
 
@@ -127,8 +127,8 @@ frontend/
 | 1 | Tracker CRUD + event timeline — replaces the sheet | done |
 | 2 | LLM ingestion and full JD extraction | done |
 | 3 | Resume match and scoring | done |
-| 4 | Agent — NL commands and follow-up detection | next |
-| 5 | Semantic search, dedup, analytics | |
+| 4 | Agent — NL commands and follow-up detection | done |
+| 5 | Semantic search, dedup, analytics | next |
 | 6 | Vercel + EC2 deployment | |
 
 ## Extraction refuses to guess
@@ -178,6 +178,36 @@ The free tier allows 8,000 tokens per minute, and `max_completion_tokens` counts
 against that budget *before* generation, so it is capped at 3,000 rather than
 left optimistic. Groq reports token exhaustion as a `413`, which reads like
 "payload too large" and is not.
+
+## The agent cannot write
+
+`/agent/chat` answers or returns a *proposal*. `/agent/confirm` performs the
+write. A model that cannot write cannot write to the wrong row — a misread
+instruction produces a confirmation dialog you reject, not a corrupted timeline
+you discover three weeks later.
+
+Two constraints follow from that:
+
+- **The model never sees an application id.** It proposes a target in your own
+  words — "the Amazon one" — and the tracker resolves it, so it cannot aim at a
+  row it was not shown.
+- **Ambiguity becomes a question.** Two roles at one company produce a list to
+  choose from, never a guess.
+
+Agent writes go through the same append-only log as manual ones, marked
+`source='agent'`, so they are visible on the timeline and undone by appending a
+correction rather than by editing history.
+
+## Follow-up detection is SQL
+
+Deciding something has been silent for seven days is a date subtraction. Giving
+that to a model would make a deterministic rule non-deterministic, spend tokens
+on every sweep, and remove the ability to test the one part of the feature that
+must not be wrong. Rules live in `follow_up_rules`; the agent's job starts
+afterwards, explaining and drafting.
+
+Staleness measures `last_activity_at`, not `current_status_at` — a recruiter
+replying means an application is not stale even though it has not advanced.
 
 ## Scoring is arithmetic, not vibes
 

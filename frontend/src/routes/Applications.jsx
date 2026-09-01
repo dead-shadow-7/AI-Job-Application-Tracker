@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { ErrorState } from '@/components/ErrorState'
+import { NeedsAttention } from '@/components/NeedsAttention'
 import { Spinner } from '@/components/Spinner'
 import { StatusBadge } from '@/components/StatusBadge'
 import { api } from '@/lib/api'
@@ -97,6 +98,8 @@ export function Applications() {
           </Link>
         </div>
       </div>
+
+      <NeedsAttention />
 
       <div className="space-y-3 rounded-xl border border-border-subtle bg-surface p-4">
         <form

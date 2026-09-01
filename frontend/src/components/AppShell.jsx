@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import { Link, Outlet } from 'react-router-dom'
 import { useAuth } from '@/auth/authContext'
+import { AgentChat } from '@/components/AgentChat'
 
 export function AppShell() {
   const { user, signOut } = useAuth()
+  const [chatOpen, setChatOpen] = useState(false)
 
   return (
     <div className="min-h-dvh">
@@ -18,6 +21,14 @@ export function AppShell() {
             >
               Resume
             </Link>
+            <button
+              type="button"
+              onClick={() => setChatOpen((open) => !open)}
+              aria-expanded={chatOpen}
+              className="rounded-lg border border-border-subtle px-3 py-1.5 text-sm transition hover:bg-surface-muted"
+            >
+              Assistant
+            </button>
             <span className="hidden text-xs text-ink-muted sm:inline">{user?.email}</span>
             <button
               type="button"
@@ -33,6 +44,8 @@ export function AppShell() {
       <main className="mx-auto max-w-6xl px-6 py-8">
         <Outlet />
       </main>
+
+      <AgentChat open={chatOpen} onClose={() => setChatOpen(false)} />
     </div>
   )
 }

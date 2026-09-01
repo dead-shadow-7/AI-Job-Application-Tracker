@@ -130,6 +130,17 @@ export const api = {
   computeMatch: (applicationId) =>
     apiFetch(`/api/v1/applications/${applicationId}/match`, { method: 'POST' }),
 
+  // Applications a follow-up rule has fired on, with the rule that fired.
+  needsAttention: () => apiFetch('/api/v1/needs-attention'),
+  closeGhosted: () => apiFetch('/api/v1/needs-attention/close-ghosted', { method: 'POST' }),
+  listRules: () => apiFetch('/api/v1/follow-up-rules'),
+  updateRule: (id, body) =>
+    apiFetch(`/api/v1/follow-up-rules/${id}`, { method: 'PATCH', body }),
+
+  // chat NEVER writes — it returns a proposal. confirm performs the write.
+  agentChat: (message) => apiFetch('/api/v1/agent/chat', { method: 'POST', body: { message } }),
+  agentConfirm: (body) => apiFetch('/api/v1/agent/confirm', { method: 'POST', body }),
+
   listSkills: (params = {}) => apiFetch(`/api/v1/skills${query(params)}`),
   listCompanies: (params = {}) => apiFetch(`/api/v1/companies${query(params)}`),
   updateJob: (id, body) => apiFetch(`/api/v1/jobs/${id}`, { method: 'PATCH', body }),
