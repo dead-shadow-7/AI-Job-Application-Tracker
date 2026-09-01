@@ -155,8 +155,13 @@ frontend/
 | 2 | LLM ingestion and full JD extraction | done |
 | 3 | Resume match and scoring | done |
 | 4 | Agent — NL commands and follow-up detection | done |
-| 5 | Semantic search, dedup, analytics | next |
-| 6 | Vercel + EC2 deployment | |
+| 5 | Semantic search, dedup, analytics | done |
+| 6 | Vercel + EC2 deployment, daily sweep | next |
+
+Known gaps, deliberately: there is no extraction eval set, so a prompt change is
+caught by review rather than by a test; the skill taxonomy has no mobile
+entries, so a role asking for Swift is refused; and the follow-up sweep runs on
+request rather than on a schedule, which is what Phase 6 adds.
 
 ## Extraction refuses to guess
 
