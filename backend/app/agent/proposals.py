@@ -27,8 +27,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.resolving import resolve_one
-from app.domain.enums import EventType, InterviewStageType, Priority, WorkMode
+from app.domain.enums import EventType, InterviewStageType, WorkMode
 from app.models.application import ApplicationEvent
+from app.schemas.agent import CLEARABLE
 from app.services.resolver import Candidate, resolve_application
 
 
@@ -272,6 +273,108 @@ async def propose_tracked_posting(
     )
 
 
+async def propose_description_edit(
+    session: AsyncSession, user_id: uuid.UUID, arguments: dict[str, Any], *, message: str
+) -> tuple[str, dict[str, Any] | None]:
+    """Cut lines out of a stored posting.
+
+    Pasted postings arrive carrying the page around them — "Application status",
+    "View resume", "Meet the hiring team", the recruiter's headline. It is
+    noise, it is what the assistant reads when asked about the role, and asking
+    to be rid of it is reasonable.
+
+    Removal only, never rewriting. Handing the model a 3,000-character
+    description and asking for a corrected one gets a *rewrite* — it condenses
+    and reflows, the same failure that made "share the JD" return a summary of
+    itself, except here the result would be saved over the original. So the
+    model says which lines to drop and the server drops exactly those,
+    literally. Anything more involved than deleting lines belongs in the
+    editor on the page, where the user types the text themselves.
+    """
+    candidate, problem = await resolve_one(session, user_id, arguments.get("query", ""))
+    if candidate is None:
+        return problem or "No such application.", None
+
+    job = candidate.application.job
+    if not job.description:
+        return f"No description is stored for {candidate.label}, so there is nothing to trim.", None
+
+    # Both the model's quote and the user's own message, because neither alone
+    # is reliable. Asked to remove a block of six lines the model splits it into
+    # six separate tool calls, and only one proposal survives a turn — so acting
+    # on its argument alone would delete a sixth of what was asked for. The
+    # user's message is where the block actually is; the instruction wrapped
+    # around it matches nothing in the description and falls away by itself.
+    #
+    # Matched line by line on trimmed text: the model reflows whatever it
+    # quotes, so a substring match on the block as given fails almost always.
+    unwanted = {
+        line.strip()
+        for source in (arguments.get("remove_text") or "", message)
+        for line in source.splitlines()
+        if line.strip()
+    }
+    if not unwanted:
+        return "I need the exact text to remove. Quote it from the description.", None
+    kept: list[str] = []
+    dropped: list[str] = []
+    for line in job.description.splitlines():
+        (dropped if line.strip() and line.strip() in unwanted else kept).append(line)
+
+    if not dropped:
+        return (
+            "None of those lines appear in the stored description. Ask them to quote it "
+            "exactly as it is shown, or to use the Edit button on the role panel.",
+            None,
+        )
+
+    cleaned = "\n".join(kept).strip()
+    if not cleaned:
+        return (
+            "That would delete the entire description. Refuse, and say so — if they really "
+            "want it empty they can clear it in the editor on the page.",
+            None,
+        )
+    # Trimming page furniture takes a few lines off the top and bottom. Anything
+    # taking most of the posting is a mismatch, not a trim — and this deletes
+    # text that only exists here once the source tab is closed.
+    #
+    # Only applied to descriptions long enough for "most of it" to mean
+    # something. On a three-line note, removing two lines is an ordinary edit.
+    guarded = len(job.description) >= MIN_GUARDED_CHARS
+    if guarded and len(cleaned) < len(job.description) * (1 - MAX_TRIM_FRACTION):
+        return (
+            f"That would cut most of the description away, leaving {len(cleaned)} of "
+            f"{len(job.description)} characters. Refuse — that is a rewrite, not a trim. "
+            "Point them at the Edit button on the role panel.",
+            None,
+        )
+
+    missed = len(unwanted) - len({line.strip() for line in dropped})
+    preview = [line.strip() for line in dropped[:5]]
+    details = [
+        f"Removing {len(dropped)} lines, {len(job.description) - len(cleaned)} characters",
+        f"Description goes from {len(job.description)} to {len(cleaned)} characters",
+        *[f"  − {line[:70]}" for line in preview],
+    ]
+    if len(dropped) > len(preview):
+        details.append(f"  … and {len(dropped) - len(preview)} more lines")
+    if missed:
+        details.append(f"{missed} of the quoted lines were not found and are left alone")
+
+    return (
+        f"Prepared, pending confirmation: remove {len(dropped)} lines from the description of "
+        f"{candidate.label}. Say how much is going, and that nothing else in it is touched.",
+        _targeted(
+            candidate,
+            "edit_description",
+            f"Trim {len(dropped)} lines from {candidate.label}",
+            details,
+            {"description": cleaned},
+        ),
+    )
+
+
 async def propose_update(
     session: AsyncSession, user_id: uuid.UUID, arguments: dict[str, Any]
 ) -> tuple[str, dict[str, Any] | None]:
@@ -282,13 +385,31 @@ async def propose_update(
     let the cache diverge from its own source of truth.
     """
     query = arguments.get("query", "")
-    priority = _enum_or_none(Priority, arguments.get("priority"))
     notes = arguments.get("notes")
 
-    if priority is None and not notes:
+    # Every value the model actually supplied. Nulls are dropped rather than
+    # read as "empty this column": optional tool parameters are declared
+    # nullable, and models emit null for arguments they simply have nothing to
+    # say about. Clearing is a separate, explicit list.
+    values = {key: arguments[key] for key in EDITABLE if arguments.get(key) not in (None, "")}
+    clear = [f for f in (arguments.get("clear") or []) if f in CLEARABLE]
+
+    if not values and not clear:
         return (
-            "Nothing to change. Priority must be low, medium or high; notes is free text. "
-            "To move an application's status, propose an event instead.",
+            "Nothing to change. Say which field and its new value, or list fields to clear. "
+            "Status is not one of them — it comes from the event log, so propose an event instead.",
+            None,
+        )
+
+    # A note the length of a document is a description that came to the wrong
+    # tool. Asked to trim a job description with no tool for it, the model
+    # reached for this one and wrote "Removed extraneous details from the job
+    # description" into notes — then reported the edit as done, while the
+    # description sat untouched. Nothing about that was visible to the user.
+    if notes and len(notes) > MAX_NOTE_CHARS:
+        return (
+            "That is too long for a note. If they are trying to change the job description, "
+            "use propose_description_edit; notes are for your own short remarks.",
             None,
         )
 
@@ -296,21 +417,25 @@ async def propose_update(
     if candidate is None:
         return problem or "No such application.", None
 
-    details = []
-    if priority:
-        details.append(f"Priority: {priority.value}")
-    if notes:
-        details.append(f"Notes: {notes}")
+    details = [f"{EDITABLE[key]}: {value}" for key, value in values.items()]
+    details += [f"{EDITABLE[key]}: cleared" for key in clear]
     details.append(f"On: {candidate.label}")
 
+    # Names the fields. "Update Backend Engineer at Amazon" is true of half a
+    # dozen different actions, and a card you have to read twice to tell them
+    # apart is one you stop reading.
+    touched = [EDITABLE[k] for k in [*values, *clear]]
+    named = ", ".join(touched[:3]) + (f" and {len(touched) - 3} more" if len(touched) > 3 else "")
+
     return (
-        f"Prepared, pending confirmation: update {candidate.label}.",
+        f"Prepared, pending confirmation: set {named} on {candidate.label}. This does NOT "
+        "touch the job description — that is propose_description_edit.",
         _targeted(
             candidate,
             "update_application",
-            f"Update {candidate.label}",
+            f"Set {named} on {candidate.label}",
             details,
-            {"priority": priority.value if priority else None, "notes": notes},
+            {**values, "clear": clear},
         ),
     )
 
@@ -426,6 +551,43 @@ async def propose_delete(
 # for "SDE" against "SDE I" and for punctuation drift, tight enough that Backend
 # and Frontend Engineer stay separate.
 SAME_ROLE = 0.8
+
+# Longer than any remark someone types about their own application, and far
+# shorter than a job description. The gap between the two is what makes this a
+# usable signal that the model has confused the one for the other.
+MAX_NOTE_CHARS = 1000
+
+# Everything the assistant may correct on a tracked application, and the label
+# the confirm card shows for it. The same set the Edit buttons on the page
+# offer, so "ask it" and "do it yourself" reach the same fields — a capability
+# available in one place and not the other is the kind of gap you rediscover
+# every time you hit it.
+#
+# Absent on purpose: status (derived from the event log), company (renaming a
+# shared row would rename it for every application against it), and the
+# description (a document, and its own tool).
+EDITABLE = {
+    "title": "Role title",
+    "location": "Location",
+    "work_mode": "Work mode",
+    "seniority": "Seniority",
+    "employment_type": "Employment type",
+    "salary_min": "Salary from",
+    "salary_max": "Salary to",
+    "salary_currency": "Currency",
+    "salary_period": "Salary period",
+    "years_experience_min": "Years from",
+    "years_experience_max": "Years to",
+    "source_platform": "Found on",
+    "url": "Posting link",
+    "priority": "Priority",
+    "notes": "Your notes",
+}
+
+# Removing page furniture takes a few lines. Removing over half the posting is a
+# mismatched quote, and the text being deleted usually exists nowhere else.
+MAX_TRIM_FRACTION = 0.5
+MIN_GUARDED_CHARS = 500
 
 
 async def _already_tracked(

@@ -20,7 +20,7 @@ from app.models.company import Company
 from app.models.job import Job
 from app.models.skill import Skill
 from app.schemas.job import CompanyRead, JobRead, JobUpdate, RequirementIn, SkillRead
-from app.services.applications import embed_job, set_requirements, set_skills
+from app.services.applications import content_hash, embed_job, set_requirements, set_skills
 
 router = APIRouter(tags=["catalog"])
 
@@ -90,6 +90,12 @@ async def update_job(
 
     for field, value in changes.items():
         setattr(job, field, value.value if hasattr(value, "value") else value)
+
+    # The hash is derived from the description and is what exact-duplicate
+    # detection compares against. Editing one without the other means a
+    # re-paste of the original posting stops matching the row it created.
+    if "description" in changes:
+        job.content_hash = content_hash(job.description)
 
     if requirements is not None:
         await set_requirements(session, job, [RequirementIn(**r) for r in requirements])

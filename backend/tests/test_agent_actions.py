@@ -171,6 +171,260 @@ async def test_updating_priority_takes_effect_only_on_confirmation(
     assert updated["notes"] == "Chase this one"
 
 
+async def test_any_tracked_detail_can_be_corrected(client: AsyncClient, llm) -> None:
+    """The Edit buttons on the page reach every field; the assistant reached
+    two. A capability available in one place and not the other is the kind of
+    gap you rediscover every time you hit it."""
+    llm(
+        calls(
+            "propose_update",
+            query="Amazon",
+            title="Senior Backend Engineer",
+            location="Bengaluru",
+            seniority="senior",
+            salary_min=1800000,
+            salary_max=2400000,
+            salary_currency="INR",
+            source_platform="LinkedIn",
+        ),
+        says("Confirm and I will correct it."),
+    )
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon", title="Backend Engineer")
+
+    action = (await user.post("/api/v1/agent/chat", {"message": "fix the details"})).json()[
+        "pending_action"
+    ]
+    saved = (
+        await user.post("/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]})
+    ).json()["application"]
+
+    job = saved["job"]
+    assert job["title"] == "Senior Backend Engineer"
+    assert job["location"] == "Bengaluru"
+    assert job["seniority"] == "senior"
+    assert float(job["salary_min"]) == 1_800_000
+    assert job["source_platform"] == "LinkedIn"
+
+
+async def test_a_value_can_be_removed(client: AsyncClient, llm) -> None:
+    """ "Remove the note" used to be impossible: an absent field means "no
+    change", so there was no way to express "make this empty" at all."""
+    llm(calls("propose_update", query="Amazon", clear=["notes"]), says("Confirm it."))
+    user = await Session(client).start()
+    application = await user.create_application(company_name="Amazon")
+    await user.patch(f"/api/v1/applications/{application['id']}", {"notes": "Old remark"})
+
+    action = (await user.post("/api/v1/agent/chat", {"message": "remove the note"})).json()[
+        "pending_action"
+    ]
+    assert "cleared" in " ".join(action["details"])
+
+    saved = (
+        await user.post("/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]})
+    ).json()["application"]
+
+    assert saved["notes"] is None
+
+
+async def test_a_null_argument_is_not_read_as_a_request_to_clear(client: AsyncClient, llm) -> None:
+    """Optional tool parameters are declared nullable so a model can pass null
+    for something it has nothing to say about. Reading those as "empty this
+    column" would wipe the salary every time it mentioned a priority."""
+    llm(
+        calls("propose_update", query="Amazon", priority="high", location=None, salary_min=None),
+        says("Confirm it."),
+    )
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon", location="Pune")
+
+    action = (await user.post("/api/v1/agent/chat", {"message": "make it high"})).json()[
+        "pending_action"
+    ]
+    saved = (
+        await user.post("/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]})
+    ).json()["application"]
+
+    assert saved["priority"] == "high"
+    assert saved["job"]["location"] == "Pune", "an unmentioned field must survive"
+
+
+async def test_editing_the_title_through_chat_refreshes_the_search_vector(
+    client: AsyncClient, llm
+) -> None:
+    from sqlalchemy import text as sql
+
+    from app.db.session import open_user_session
+
+    llm(calls("propose_update", query="Amazon", title="Platform Engineer"), says("Confirm it."))
+    user = await Session(client).start()
+    application = await user.create_application(company_name="Amazon", title="Backend Engineer")
+
+    action = (await user.post("/api/v1/agent/chat", {"message": "retitle it"})).json()[
+        "pending_action"
+    ]
+    await user.post("/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]})
+
+    async for session in open_user_session(user.user_id):
+        stored = (
+            await session.execute(
+                sql("SELECT content FROM job_embeddings WHERE job_id = :j"),
+                {"j": application["job"]["id"]},
+            )
+        ).scalar_one()
+    assert "Platform Engineer" in stored
+
+
+# --- Editing a stored description ------------------------------------------
+
+
+async def test_page_furniture_can_be_cut_out_of_a_description(client: AsyncClient, llm) -> None:
+    """A posting pasted from a job board arrives wrapped in the page around it —
+    "Application status", "Meet the hiring team", the recruiter's headline. It is
+    noise, and it is what the assistant reads when asked about the role."""
+    posting = (
+        "About the job\nBuild agentic AI systems.\n"
+        "Application status\nView resume\nMeet the hiring team\n"
+        "Requirements\nPython and LLMs.\n"
+    )
+    llm(
+        calls(
+            "propose_description_edit",
+            query="Amazon",
+            remove_text="Application status\nView resume\nMeet the hiring team",
+        ),
+        says("Confirm and I will trim it."),
+    )
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon", description=posting)
+
+    action = (await user.post("/api/v1/agent/chat", {"message": "remove this"})).json()[
+        "pending_action"
+    ]
+    assert action["kind"] == "edit_description"
+
+    body = (
+        await user.post("/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]})
+    ).json()["application"]
+
+    assert "Meet the hiring team" not in body["job"]["description"]
+    assert "Build agentic AI systems." in body["job"]["description"], "the role survives"
+    assert "Python and LLMs." in body["job"]["description"]
+
+
+async def test_the_card_says_how_much_is_going(client: AsyncClient, llm) -> None:
+    llm(
+        calls("propose_description_edit", query="Amazon", remove_text="View resume"),
+        says("Confirm to trim it."),
+    )
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon", description="Real content\nView resume\n")
+
+    action = (await user.post("/api/v1/agent/chat", {"message": "trim it"})).json()[
+        "pending_action"
+    ]
+
+    shown = " ".join(action["details"])
+    assert "Removing 1 lines" in shown
+    assert "View resume" in shown, "the user must see what is being deleted"
+
+
+async def test_text_that_is_not_there_removes_nothing(client: AsyncClient, llm) -> None:
+    """The model reflows whatever it quotes. Silently deleting the nearest thing
+    would be far worse than reporting a miss."""
+    stub = llm(
+        calls("propose_description_edit", query="Amazon", remove_text="Some invented heading"),
+        says("I could not find that."),
+    )
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon", description="Real content only.")
+
+    body = (await user.post("/api/v1/agent/chat", {"message": "remove that bit"})).json()
+
+    assert body["pending_action"] is None
+    assert "None of those lines appear" in stub.tool_output()
+
+
+async def test_it_refuses_to_empty_a_description(client: AsyncClient, llm) -> None:
+    """Quoting the whole thing back is an easy mistake and an expensive one."""
+    stub = llm(
+        calls("propose_description_edit", query="Amazon", remove_text="Only line here"),
+        says("That would delete everything."),
+    )
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon", description="Only line here")
+
+    body = (await user.post("/api/v1/agent/chat", {"message": "remove it"})).json()
+
+    assert body["pending_action"] is None
+    assert "entire description" in stub.tool_output()
+
+
+async def test_a_description_sized_note_is_refused(client: AsyncClient, llm) -> None:
+    """The failure this exists for: with no tool for editing a description, the
+    model reached for the update tool and wrote "Removed extraneous details from
+    the job description" into notes — then reported the edit as done, while the
+    description sat untouched."""
+    stub = llm(
+        calls("propose_update", query="Amazon", notes="x" * 2000),
+        says("Wrong tool."),
+    )
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon")
+
+    body = (await user.post("/api/v1/agent/chat", {"message": "clean up the JD"})).json()
+
+    assert body["pending_action"] is None
+    assert "propose_description_edit" in stub.tool_output()
+
+
+async def test_an_update_card_names_the_field_it_changes(client: AsyncClient, llm) -> None:
+    """ "Update Backend Engineer at Amazon" is true of four different actions.
+    A card you have to read twice to tell them apart is one you stop reading."""
+    llm(calls("propose_update", query="Amazon", priority="high"), says("Confirm it."))
+    user = await Session(client).start()
+    await user.create_application(company_name="Amazon")
+
+    action = (await user.post("/api/v1/agent/chat", {"message": "bump it"})).json()[
+        "pending_action"
+    ]
+
+    assert "Priority" in action["summary"]
+
+
+async def test_trimming_updates_the_duplicate_hash(client: AsyncClient, llm) -> None:
+    """The hash is derived from the description and is what exact-duplicate
+    detection compares. Left stale, re-pasting the original posting stops
+    matching the row it created, and the timeline forks."""
+    from sqlalchemy import text as sql
+
+    from app.db.session import open_user_session
+
+    llm(
+        calls("propose_description_edit", query="Amazon", remove_text="View resume"),
+        says("Confirm it."),
+    )
+    user = await Session(client).start()
+    application = await user.create_application(
+        company_name="Amazon", description="Real content\nView resume"
+    )
+    job_id = application["job"]["id"]
+
+    async for session in open_user_session(user.user_id):
+        before = (
+            await session.execute(sql("SELECT content_hash FROM jobs WHERE id = :j"), {"j": job_id})
+        ).scalar_one()
+
+    action = (await user.post("/api/v1/agent/chat", {"message": "trim"})).json()["pending_action"]
+    await user.post("/api/v1/agent/confirm", {"kind": action["kind"], **action["payload"]})
+
+    async for session in open_user_session(user.user_id):
+        after = (
+            await session.execute(sql("SELECT content_hash FROM jobs WHERE id = :j"), {"j": job_id})
+        ).scalar_one()
+    assert after != before
+
+
 # --- Scheduling ------------------------------------------------------------
 
 

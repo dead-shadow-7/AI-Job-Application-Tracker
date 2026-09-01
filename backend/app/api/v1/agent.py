@@ -41,6 +41,7 @@ from app.schemas.agent import (
     ConfirmCreateApplication,
     ConfirmCreateFromPosting,
     ConfirmDeleteApplication,
+    ConfirmEditDescription,
     ConfirmEvent,
     ConfirmRequest,
     ConfirmResult,
@@ -49,7 +50,7 @@ from app.schemas.agent import (
 )
 from app.schemas.application import detail
 from app.schemas.job import JobCreate
-from app.services.applications import create_application
+from app.services.applications import content_hash, create_application, embed_job
 from app.services.events import append_event, get_application, reload_application
 from app.services.followups import ensure_default_rules
 
@@ -127,6 +128,9 @@ async def confirm(
         elif isinstance(payload, ConfirmUpdateApplication):
             application = await _update(session, user_id, payload)
             summary = "updated"
+        elif isinstance(payload, ConfirmEditDescription):
+            application = await _edit_description(session, user_id, payload)
+            summary = "trimmed the job description"
         else:
             application = await _schedule(session, user_id, payload)
             summary = f"scheduled a {payload.stage_type.value} round"
@@ -224,11 +228,49 @@ async def _create_from_posting(
 async def _update(
     session: AsyncSession, user_id: UUID, payload: ConfirmUpdateApplication
 ) -> Application:
+    """Correct any tracked detail.
+
+    Priority and notes belong to this user; the rest describe the posting and
+    live on the shared job row. Splitting them here rather than in the tool
+    keeps the assistant from having to know which table a field is in.
+    """
     application = await get_application(session, payload.application_id, user_id)
-    if payload.priority is not None:
-        application.priority = payload.priority.value
-    if payload.notes is not None:
-        application.notes = payload.notes
+    supplied = payload.model_dump(exclude_unset=True, exclude={"kind", "application_id", "clear"})
+
+    for field, value in supplied.items():
+        target = application if field in _MINE else application.job
+        setattr(target, field, value.value if hasattr(value, "value") else value)
+
+    for field in payload.clear:
+        setattr(application if field in _MINE else application.job, field, None)
+    await session.flush()
+
+    # Same reason as the manual editor: the stored vector is built from title,
+    # seniority and location, so editing one without re-embedding leaves
+    # semantic search answering from the old text.
+    if (supplied.keys() | set(payload.clear)) & _EMBEDDED:
+        await embed_job(session, application.job)
+    return application
+
+
+# Fields that belong to this user rather than to the shared posting.
+_MINE = {"priority", "notes"}
+_EMBEDDED = {"title", "seniority", "location"}
+
+
+async def _edit_description(
+    session: AsyncSession, user_id: UUID, payload: ConfirmEditDescription
+) -> Application:
+    """Write the trimmed posting back.
+
+    The content hash goes with it. It is derived from the description and is
+    what exact-duplicate detection compares against, so leaving it behind would
+    mean a re-paste of the *original* posting no longer matches the row it came
+    from — the duplicate check would pass and the timeline would fork.
+    """
+    application = await get_application(session, payload.application_id, user_id)
+    application.job.description = payload.description
+    application.job.content_hash = content_hash(payload.description)
     await session.flush()
     return application
 

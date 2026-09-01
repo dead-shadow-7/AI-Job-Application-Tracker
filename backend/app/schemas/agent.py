@@ -12,12 +12,21 @@ and a card that hides a field the model filled in is not a check at all.
 """
 
 from datetime import datetime
+from decimal import Decimal
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
-from app.domain.enums import EventType, InterviewStageType, Priority, WorkMode
+from app.domain.enums import (
+    EmploymentType,
+    EventType,
+    InterviewStageType,
+    Priority,
+    SalaryPeriod,
+    Seniority,
+    WorkMode,
+)
 from app.schemas.application import ApplicationRead
 from app.schemas.job import JobCreate
 
@@ -39,6 +48,7 @@ ActionKind = Literal[
     "create_application",
     "create_from_posting",
     "update_application",
+    "edit_description",
     "schedule_interview",
     "delete_application",
 ]
@@ -181,14 +191,84 @@ class ConfirmCreateFromPosting(JobCreate):
     occurred_days_ago: int = Field(default=0, ge=0, le=3650)
 
 
+CLEARABLE = frozenset(
+    {
+        "notes",
+        "location",
+        "work_mode",
+        "seniority",
+        "employment_type",
+        "salary_min",
+        "salary_max",
+        "salary_currency",
+        "salary_period",
+        "years_experience_min",
+        "years_experience_max",
+        "source_platform",
+        "url",
+    }
+)
+
+
 class ConfirmUpdateApplication(BaseModel):
-    """Change priority or notes. Status is absent by design — it is derived from
-    the event log, so moving an application means appending an event."""
+    """Correct any tracked detail.
+
+    Two records behind one action: priority and notes are yours, the rest
+    describe the posting and live on the shared job row. The assistant does not
+    need to know which is which, and neither does the person confirming.
+
+    Status is absent by design — it is derived from the event log, so moving an
+    application means appending an event.
+
+    `clear` is an explicit list rather than "a field sent as null", because
+    optional tool parameters are declared nullable and models emit null for
+    arguments they simply have nothing to say about. Reading those as "empty
+    this column" would wipe a salary every time the model mentioned a priority.
+    """
 
     kind: Literal["update_application"]
     application_id: UUID
+
     priority: Priority | None = None
     notes: str | None = Field(default=None, max_length=4000)
+
+    title: str | None = Field(default=None, min_length=1, max_length=300)
+    location: str | None = Field(default=None, max_length=200)
+    work_mode: WorkMode | None = None
+    seniority: Seniority | None = None
+    employment_type: EmploymentType | None = None
+    salary_min: Decimal | None = Field(default=None, ge=0)
+    salary_max: Decimal | None = Field(default=None, ge=0)
+    salary_currency: str | None = Field(default=None, min_length=3, max_length=3)
+    salary_period: SalaryPeriod | None = None
+    years_experience_min: int | None = Field(default=None, ge=0, le=60)
+    years_experience_max: int | None = Field(default=None, ge=0, le=60)
+    source_platform: str | None = Field(default=None, max_length=60)
+    url: str | None = Field(default=None, max_length=1000)
+
+    clear: list[str] = Field(default_factory=list)
+
+    @field_validator("clear")
+    @classmethod
+    def _known_fields(cls, value: list[str]) -> list[str]:
+        unknown = sorted(set(value) - CLEARABLE)
+        if unknown:
+            raise ValueError(f"Cannot clear: {', '.join(unknown)}")
+        return value
+
+
+class ConfirmEditDescription(BaseModel):
+    """Replace a stored posting with a trimmed version of itself.
+
+    The text was computed server-side by deleting whole lines the user quoted,
+    never generated. A model handed a description and asked to correct it
+    returns a rewrite — shorter, reflowed, quietly missing things — and here
+    that would be written over the original.
+    """
+
+    kind: Literal["edit_description"]
+    application_id: UUID
+    description: str = Field(min_length=1, max_length=200_000)
 
 
 class ConfirmScheduleInterview(BaseModel):
@@ -229,6 +309,7 @@ ConfirmRequest = Annotated[
     | ConfirmCreateApplication
     | ConfirmCreateFromPosting
     | ConfirmUpdateApplication
+    | ConfirmEditDescription
     | ConfirmScheduleInterview
     | ConfirmDeleteApplication,
     Field(discriminator="kind"),

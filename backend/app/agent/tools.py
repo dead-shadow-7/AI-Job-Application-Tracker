@@ -33,7 +33,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent import analysis, proposals
 from app.agent.resolving import resolve_application_only
-from app.domain.enums import EventType, InterviewStageType, Priority, WorkMode
+from app.domain.enums import (
+    EmploymentType,
+    EventType,
+    InterviewStageType,
+    Priority,
+    SalaryPeriod,
+    Seniority,
+    WorkMode,
+)
 from app.models.job import JobRequirement, JobSkill
 from app.models.resume import MatchAnalysis
 from app.models.skill import Skill
@@ -93,16 +101,30 @@ def _nullable(schema: dict[str, Any]) -> dict[str, Any]:
     return widened
 
 
-def _str(description: str) -> dict[str, Any]:
-    return {"type": "string", "description": description}
+# Parameter descriptions are omitted where the name already says it. Every
+# schema is re-sent on every round, so prose here is rented, not bought: the
+# whole block is ~3,300 tokens before the user has typed anything, and a
+# multi-step answer pays it several times over. Descriptions are kept only
+# where they change what the model does — which value to copy, what a flag
+# means, which of two similar tools to reach for.
+def _str(description: str | None = None) -> dict[str, Any]:
+    return {"type": "string", **({"description": description} if description else {})}
 
 
-def _enum(enum_cls: type[StrEnum], description: str) -> dict[str, Any]:
+def _enum(enum_cls: type[StrEnum], description: str | None = None) -> dict[str, Any]:
     return {
         "type": "string",
         "enum": [member.value for member in enum_cls],
-        "description": description,
+        **({"description": description} if description else {}),
     }
+
+
+def _num(description: str | None = None) -> dict[str, Any]:
+    return {"type": "number", **({"description": description} if description else {})}
+
+
+def _int(description: str | None = None) -> dict[str, Any]:
+    return {"type": "integer", **({"description": description} if description else {})}
 
 
 def _days(description: str) -> dict[str, Any]:
@@ -151,7 +173,7 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
     _tool(
         "find_by_skill",
         "Which tracked roles ask for a named skill, and whether it is required or preferred.",
-        {"skill": _str("A single skill name, e.g. 'Kubernetes'.")},
+        {"skill": _str("One skill, e.g. 'Kubernetes'.")},
         ["skill"],
     ),
     _tool(
@@ -219,9 +241,9 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "separately. Use for 'mark X rejected', 'I heard back from Y', 'I applied to Z'.",
         {
             "query": _QUERY,
-            "event_type": _enum(EventType, "What happened."),
+            "event_type": _enum(EventType),
             "occurred_days_ago": _days("How many days ago it happened. 0 or omit for today."),
-            "note": _str("Optional note to attach."),
+            "note": _str(),
         },
         ["query", "event_type"],
     ),
@@ -233,8 +255,8 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "does. Does NOT apply it. Prefer this over propose_new_application whenever a "
         "description was pasted.",
         {
-            "url": _str("Link to the posting, if they gave one."),
-            "source_platform": _str("Where they found it, e.g. LinkedIn."),
+            "url": _str(),
+            "source_platform": _str("e.g. LinkedIn."),
             "status": {
                 "type": "string",
                 "enum": ["saved", "applied"],
@@ -249,12 +271,12 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "NOT apply it. Records company and title only — if they pasted the posting, use "
         "propose_tracked_posting instead, which keeps the salary and skills.",
         {
-            "company_name": _str("The employer. Required."),
-            "title": _str("The role title. Required."),
-            "url": _str("Link to the posting, if they gave one."),
-            "location": _str("City or region, if mentioned."),
-            "work_mode": _enum(WorkMode, "Only if they said."),
-            "source_platform": _str("Where they found it, e.g. LinkedIn."),
+            "company_name": _str(),
+            "title": _str(),
+            "url": _str(),
+            "location": _str(),
+            "work_mode": _enum(WorkMode),
+            "source_platform": _str("e.g. LinkedIn."),
             "notes": _str("Anything else they mentioned, including any salary they stated."),
             "status": {
                 "type": "string",
@@ -266,13 +288,47 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         ["company_name", "title"],
     ),
     _tool(
+        "propose_description_edit",
+        "Propose deleting lines from a stored job description — page furniture like "
+        "'Application status' or 'Meet the hiring team' that came along with a paste. Quote "
+        "the lines to remove — ALL of them in a single call, newline separated. They are "
+        "matched and deleted literally. This can only REMOVE "
+        "text. To reword anything, tell them to use the Edit button on the role panel.",
+        {
+            "query": _QUERY,
+            "remove_text": _str("The exact lines to delete, copied from the description."),
+        },
+        ["query", "remove_text"],
+    ),
+    _tool(
         "propose_update",
-        "Propose changing an application's priority or notes. Does NOT apply it. Cannot "
+        "Correct any tracked detail of an application: role title, location, work mode, "
+        "seniority, employment type, salary, years of experience, where they found it, the "
+        "link, priority, or your notes. Send only the fields that change. Does NOT apply it, "
+        "does NOT touch the job description (use propose_description_edit), and cannot "
         "change status — that comes from the event log, so propose an event instead.",
         {
             "query": _QUERY,
-            "priority": _enum(Priority, "How much it matters to them."),
-            "notes": _str("Free-text notes to store on the application."),
+            "title": _str(),
+            "location": _str(),
+            "work_mode": _enum(WorkMode),
+            "seniority": _enum(Seniority),
+            "employment_type": _enum(EmploymentType),
+            "salary_min": _num(),
+            "salary_max": _num(),
+            "salary_currency": _str("Three letters, e.g. INR."),
+            "salary_period": _enum(SalaryPeriod),
+            "years_experience_min": _int(),
+            "years_experience_max": _int(),
+            "source_platform": _str(),
+            "url": _str(),
+            "priority": _enum(Priority),
+            "notes": _str("Their own short remark, not a document."),
+            "clear": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Fields to EMPTY, e.g. ['notes']. Omitting a field means no change.",
+            },
         },
         ["query"],
     ),
@@ -290,11 +346,11 @@ TOOL_SCHEMAS: list[dict[str, Any]] = [
         "future date belongs.",
         {
             "query": _QUERY,
-            "stage_type": _enum(InterviewStageType, "What kind of round."),
+            "stage_type": _enum(InterviewStageType),
             "in_days": _days("How many days from now it is scheduled."),
-            "round_number": {"type": "integer", "minimum": 1, "description": "Which round."},
-            "interviewer": _str("Who they are meeting, if known."),
-            "notes": _str("Anything to remember about it."),
+            "round_number": {"type": "integer", "minimum": 1},
+            "interviewer": _str(),
+            "notes": _str(),
         },
         ["query", "stage_type"],
     ),
@@ -589,6 +645,7 @@ class MessageProposer(Protocol):
 
 _MESSAGE_PROPOSERS: dict[str, MessageProposer] = {
     "propose_tracked_posting": proposals.propose_tracked_posting,
+    "propose_description_edit": proposals.propose_description_edit,
 }
 
 HANDLED = set(_READERS) | set(_PROPOSERS) | set(_MESSAGE_PROPOSERS)
