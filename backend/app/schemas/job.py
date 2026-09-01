@@ -117,6 +117,12 @@ class JobUpdate(BaseModel):
     years_experience_min: int | None = Field(default=None, ge=0, le=60)
     years_experience_max: int | None = Field(default=None, ge=0, le=60)
 
+    # Both replace the whole list when present, and are left alone when absent.
+    # Editing a requirement list is a rewrite, not a merge: matching old rows to
+    # new ones by text would resurrect a line the moment you fixed a typo in it.
+    requirements: list[RequirementIn] | None = None
+    skill_slugs: list[str] | None = None
+
 
 class JobRead(JobBase):
     model_config = ConfigDict(from_attributes=True)

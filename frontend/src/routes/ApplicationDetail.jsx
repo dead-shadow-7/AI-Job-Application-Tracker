@@ -1,20 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { DetailsPanel } from '@/components/DetailsPanel'
 import { ErrorState } from '@/components/ErrorState'
 import { MatchPanel } from '@/components/MatchPanel'
+import { RolePanel } from '@/components/RolePanel'
 import { Spinner } from '@/components/Spinner'
 import { StatusBadge } from '@/components/StatusBadge'
 import { Timeline } from '@/components/Timeline'
 import { api } from '@/lib/api'
-import {
-  EVENT_LABELS,
-  STATUS_LABELS,
-  TERMINAL_STATUSES,
-  WORK_MODE_LABELS,
-  formatDate,
-  formatSalary,
-  relativeDays,
-} from '@/lib/format'
+import { EVENT_LABELS, STATUS_LABELS, TERMINAL_STATUSES, WORK_MODE_LABELS } from '@/lib/format'
 
 const LOGGABLE = [
   'applied',
@@ -68,7 +62,6 @@ export function ApplicationDetail() {
   if (error) return <ErrorState error={error} onRetry={refetch} />
 
   const { job } = data
-  const salary = formatSalary(job)
   const stale = !TERMINAL_STATUSES.has(data.current_status)
 
   return (
@@ -160,56 +153,11 @@ export function ApplicationDetail() {
             )}
           </section>
 
-          {(job.requirements.length > 0 || job.description) && (
-            <section className="rounded-xl border border-border-subtle bg-surface p-5">
-              <h2 className="text-sm font-medium">The role</h2>
-              {job.requirements.length > 0 && (
-                <div className="mt-3 grid gap-4 sm:grid-cols-2">
-                  <RequirementList
-                    title="Must have"
-                    items={job.requirements.filter((r) => r.kind === 'must')}
-                  />
-                  <RequirementList
-                    title="Nice to have"
-                    items={job.requirements.filter((r) => r.kind === 'nice')}
-                  />
-                </div>
-              )}
-              {job.description && (
-                <p className="mt-4 whitespace-pre-wrap text-sm text-ink-muted">{job.description}</p>
-              )}
-            </section>
-          )}
+          <RolePanel job={job} />
         </div>
 
         <aside className="space-y-6">
-          <section className="rounded-xl border border-border-subtle bg-surface p-5">
-            <h2 className="text-sm font-medium">Details</h2>
-            <dl className="mt-3 space-y-2.5 text-sm">
-              <Detail label="Applied" value={formatDate(data.applied_at)} />
-              <Detail label="Last activity" value={relativeDays(data.last_activity_at)} />
-              <Detail label="Salary" value={salary ?? '—'} />
-              <Detail label="Seniority" value={job.seniority ?? '—'} />
-              <Detail label="Source" value={job.source_platform ?? '—'} />
-              <Detail label="Priority" value={data.priority} />
-            </dl>
-          </section>
-
-          {job.skills.length > 0 && (
-            <section className="rounded-xl border border-border-subtle bg-surface p-5">
-              <h2 className="text-sm font-medium">Skills</h2>
-              <div className="mt-3 flex flex-wrap gap-1.5">
-                {job.skills.map(({ skill }) => (
-                  <span
-                    key={skill.id}
-                    className="rounded-full bg-surface-muted px-2.5 py-1 text-xs text-ink-muted"
-                  >
-                    {skill.name}
-                  </span>
-                ))}
-              </div>
-            </section>
-          )}
+          <DetailsPanel application={data} />
 
           <MatchPanel applicationId={id} />
 
@@ -248,33 +196,6 @@ function IdleNotice({ status, days }) {
   )
 }
 
-function RequirementList({ title, items }) {
-  if (items.length === 0) return null
-  return (
-    <div>
-      <h3 className="text-xs font-medium text-ink-muted">{title}</h3>
-      <ul className="mt-1.5 space-y-1 text-sm">
-        {items.map((item) => (
-          <li key={item.id} className="flex gap-2">
-            <span aria-hidden="true" className="text-ink-muted">
-              ·
-            </span>
-            {item.text}
-          </li>
-        ))}
-      </ul>
-    </div>
-  )
-}
-
-function Detail({ label, value }) {
-  return (
-    <div className="flex justify-between gap-4">
-      <dt className="text-ink-muted">{label}</dt>
-      <dd className="text-right font-medium">{value}</dd>
-    </div>
-  )
-}
 
 function toIso(value) {
   if (!value) return null

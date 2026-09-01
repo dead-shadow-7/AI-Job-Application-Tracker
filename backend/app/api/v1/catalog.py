@@ -19,7 +19,8 @@ from app.models.application import Application
 from app.models.company import Company
 from app.models.job import Job
 from app.models.skill import Skill
-from app.schemas.job import CompanyRead, JobRead, JobUpdate, SkillRead
+from app.schemas.job import CompanyRead, JobRead, JobUpdate, RequirementIn, SkillRead
+from app.services.applications import embed_job, set_requirements, set_skills
 
 router = APIRouter(tags=["catalog"])
 
@@ -74,12 +75,40 @@ async def read_job(job_id: UUID, user: CurrentUser, session: DbSession) -> JobRe
 async def update_job(
     job_id: UUID, payload: JobUpdate, user: CurrentUser, session: DbSession
 ) -> JobRead:
+    """Fix what extraction got wrong, or fill in what it never had.
+
+    Every field is optional and only the ones sent are applied, so a null is an
+    instruction to clear rather than an accident of serialisation.
+    """
     job = await _job_you_track(session, job_id, user.id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+
+    changes = payload.model_dump(exclude_unset=True)
+    # Relationships, not columns — setattr would assign a list of dicts to a
+    # mapped collection and fail somewhere much less obvious than here.
+    requirements = changes.pop("requirements", None)
+    skill_slugs = changes.pop("skill_slugs", None)
+
+    for field, value in changes.items():
         setattr(job, field, value.value if hasattr(value, "value") else value)
+
+    if requirements is not None:
+        await set_requirements(session, job, [RequirementIn(**r) for r in requirements])
+    if skill_slugs is not None:
+        await set_skills(session, job, skill_slugs)
     await session.flush()
+
+    # The stored vector is built from title, seniority, location and the
+    # requirements. Editing any of them without re-embedding leaves semantic
+    # search and duplicate detection answering from the old text — quietly, and
+    # for as long as nobody re-saves the job.
+    if changes.keys() & _EMBEDDED_FIELDS or requirements is not None:
+        await embed_job(session, job)
+
     await session.refresh(job)
     return JobRead.model_validate(job)
+
+
+_EMBEDDED_FIELDS = {"title", "seniority", "location", "responsibilities"}
 
 
 async def _job_you_track(session: AsyncSession, job_id: UUID, user_id: UUID) -> Job:

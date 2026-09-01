@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,7 +17,7 @@ from app.models.company import Company
 from app.models.job import Job, JobRequirement, JobSkill
 from app.models.resume import JobEmbedding
 from app.models.skill import Skill
-from app.schemas.job import JobCreate
+from app.schemas.job import JobCreate, RequirementIn
 from app.services import embeddings
 from app.services.companies import resolve_company
 from app.services.events import append_event, reload_application
@@ -67,7 +67,27 @@ async def create_job(session: AsyncSession, payload: JobCreate, user_id: uuid.UU
     session.add(job)
     await session.flush()
 
-    for requirement in payload.requirements:
+    await set_requirements(session, job, payload.requirements)
+    await set_skills(session, job, payload.skill_slugs)
+
+    await session.flush()
+    await embed_job(session, job)
+    await session.refresh(job)
+    return job
+
+
+async def set_requirements(
+    session: AsyncSession, job: Job, requirements: Sequence[RequirementIn]
+) -> None:
+    """Replace a job's requirements wholesale.
+
+    Replace rather than merge, because that is what editing one actually is:
+    the requirements are a list the user rewrites, and matching old rows to new
+    ones by text would resurrect a line they had just deleted the moment they
+    fixed a typo in it.
+    """
+    await session.execute(delete(JobRequirement).where(JobRequirement.job_id == job.id))
+    for requirement in requirements:
         session.add(
             JobRequirement(
                 job_id=job.id,
@@ -77,24 +97,25 @@ async def create_job(session: AsyncSession, payload: JobCreate, user_id: uuid.UU
             )
         )
 
-    if payload.skill_slugs:
-        slugs = list(dict.fromkeys(payload.skill_slugs))  # de-dupe, keep order
-        found = (await session.execute(select(Skill).where(Skill.slug.in_(slugs)))).scalars().all()
 
-        missing = sorted(set(slugs) - {s.slug for s in found})
-        if missing:
-            # Fail loudly rather than silently dropping. A typo'd slug that
-            # vanishes without complaint produces a job with quietly incomplete
-            # skills, which then scores wrongly in Phase 3.
-            raise InvalidOperationError(f"Unknown skill slugs: {', '.join(missing)}")
+async def set_skills(session: AsyncSession, job: Job, slugs: Sequence[str] | None) -> None:
+    """Replace a job's skills, refusing any slug the taxonomy does not know."""
+    await session.execute(delete(JobSkill).where(JobSkill.job_id == job.id))
+    if not slugs:
+        return
 
-        for skill in found:
-            session.add(JobSkill(job_id=job.id, skill_id=skill.id, is_required=True))
+    wanted = list(dict.fromkeys(slugs))  # de-dupe, keep order
+    found = (await session.execute(select(Skill).where(Skill.slug.in_(wanted)))).scalars().all()
 
-    await session.flush()
-    await embed_job(session, job)
-    await session.refresh(job)
-    return job
+    missing = sorted(set(wanted) - {s.slug for s in found})
+    if missing:
+        # Fail loudly rather than silently dropping. A typo'd slug that vanishes
+        # without complaint produces a job with quietly incomplete skills, which
+        # then scores wrongly in Phase 3.
+        raise InvalidOperationError(f"Unknown skill slugs: {', '.join(missing)}")
+
+    for skill in found:
+        session.add(JobSkill(job_id=job.id, skill_id=skill.id, is_required=True))
 
 
 def job_embedding_text(
