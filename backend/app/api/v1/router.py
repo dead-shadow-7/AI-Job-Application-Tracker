@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 from app.api.v1 import (
+    agent,
     applications,
     catalog,
     contacts,
@@ -20,3 +21,4 @@ api_router.include_router(ingest.router)
 api_router.include_router(resumes.router)
 api_router.include_router(matching.router)
 api_router.include_router(followups.router)
+api_router.include_router(agent.router)
