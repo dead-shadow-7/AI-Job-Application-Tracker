@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Annotated, Literal
 
-from pydantic import Field, field_validator
+from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -53,11 +53,16 @@ class Settings(BaseSettings):
     # The constraint that rules out most alternatives is strict `json_schema`
     # response_format — schema adherence by construction rather than by parsing
     # and hoping. Extraction is worthless without it.
-    llm_provider: Literal["groq", "gemini"] = "groq"
+    llm_provider: Literal["groq", "gemini", "aicredits"] = "groq"
 
     # Verified against Groq's live model list, not the docs: the Llama chat
     # models are gone (only prompt-guard moderation variants remain), and
     # strict json_schema is supported only by the gpt-oss and qwen families.
+    #
+    # Free tier: 8,000 tokens/minute AND 200,000 tokens/day. The daily cap is
+    # the one that bites — backing off does not help, you are simply done until
+    # tomorrow. Tool schemas cost ~2,400 tokens per round, so roughly 40 agent
+    # messages exhaust a day.
     groq_api_key: str = ""
     groq_base_url: str = "https://api.groq.com/openai/v1"
     groq_extraction_model: str = "openai/gpt-oss-120b"
@@ -71,23 +76,102 @@ class Settings(BaseSettings):
     gemini_extraction_model: str = "gemini-2.5-flash"
     gemini_fast_model: str = "gemini-2.5-flash-lite"
 
+    # AI Credits — a paid INR-billed gateway, chosen to escape the free-tier
+    # daily cap. There is no tokens-per-minute or per-day ceiling; the limits
+    # are requests per minute and the wallet balance, so a long session costs
+    # money instead of stopping dead until tomorrow.
+    #
+    # Model ids are provider-prefixed and must come from GET /v1/models — the
+    # id in their own documentation example does not exist in the catalogue,
+    # and the catalogue's capability metadata is wrong in places (tts models
+    # listed as chat, o1-mini's context length off by 16x). Treat it as "what
+    # the API accepts as a model string", not as a capability sheet.
+    #
+    # gpt-4o-mini from measurement, not taste. Four candidates, scored on a
+    # 10-case tool-selection eval against the real 20-tool schema and on the
+    # salary field twice — salary being the one most likely to be wrong and
+    # least likely to be re-read once it is in the table. Monthly cost assumes
+    # 300 assistant messages and 40 pasted postings, priced from the platform's
+    # own catalogue:
+    #
+    #   gpt-oss-120b   9/10   salary WRONG    Rs 3.62
+    #   gpt-4.1-nano   6/10   salary ok       Rs 8.08
+    #   gpt-4o-mini   10/10   salary ok       Rs 12.34
+    #   gpt-5-nano     9/10   salary ok       Rs 16.77
+    #
+    # Two results worth keeping. gpt-oss-120b read "45-60 LPA" as 45 to 60
+    # rupees, twice — a hundred-thousand-fold error, from the same model id that
+    # reads it correctly on Groq. Same name, different serving stack; this
+    # gateway documents a fallback to an "aggregated provider pool" and does not
+    # say when it fires. And gpt-5-nano costs *more* than gpt-4o-mini despite a
+    # lower headline price, because it spends 735 completion tokens per
+    # assistant turn against gpt-4o-mini's 23 — reasoning tokens are billed as
+    # output. Those tokens also count against llm_max_output_tokens, so a long
+    # posting can hit the ceiling and fail outright.
+    #
+    # The whole spread is about Rs 13 a month. Nothing here is worth trading a
+    # wrong salary for.
+    #
+    # gpt-4o-mini also echoes back the exact id requested, where gpt-5-mini is
+    # served as a dated snapshot — on a gateway that reserves the right to
+    # reroute, an id that comes back verbatim is the cheapest evidence you have
+    # of what actually answered.
+    # Both spellings accepted. `extra="ignore"` means a near-miss env var name
+    # is not an error — it is silently dropped, the key reads as empty, and the
+    # app reports "no LLM configured" while the key sits in .env looking correct.
+    aicredits_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("AI_CREDITS_API_KEY", "AICREDITS_API_KEY"),
+    )
+    aicredits_base_url: str = "https://api.aicredits.in/v1"
+    aicredits_extraction_model: str = "openai/gpt-4o-mini"
+    aicredits_fast_model: str = "openai/gpt-4o-mini"
+
+    @property
+    def _llm(self) -> tuple[str, str, str, str]:
+        """(key, base URL, extraction model, fast model) for the active provider.
+
+        A table rather than three parallel if/else chains. Adding a provider
+        used to mean editing every accessor and there was nothing to catch a
+        missed one — the result would be the right key sent to the wrong host.
+        """
+        table = {
+            "groq": (
+                self.groq_api_key,
+                self.groq_base_url,
+                self.groq_extraction_model,
+                self.groq_fast_model,
+            ),
+            "gemini": (
+                self.gemini_api_key,
+                self.gemini_base_url,
+                self.gemini_extraction_model,
+                self.gemini_fast_model,
+            ),
+            "aicredits": (
+                self.aicredits_api_key,
+                self.aicredits_base_url,
+                self.aicredits_extraction_model,
+                self.aicredits_fast_model,
+            ),
+        }
+        return table[self.llm_provider]
+
     @property
     def llm_api_key(self) -> str:
-        return self.gemini_api_key if self.llm_provider == "gemini" else self.groq_api_key
+        return self._llm[0]
 
     @property
     def llm_base_url(self) -> str:
-        return self.gemini_base_url if self.llm_provider == "gemini" else self.groq_base_url
+        return self._llm[1]
 
     @property
     def extraction_model(self) -> str:
-        if self.llm_provider == "gemini":
-            return self.gemini_extraction_model
-        return self.groq_extraction_model
+        return self._llm[2]
 
     @property
     def fast_model(self) -> str:
-        return self.gemini_fast_model if self.llm_provider == "gemini" else self.groq_fast_model
+        return self._llm[3]
 
     # Provider-independent request settings.
     llm_timeout_seconds: float = 90.0

@@ -16,17 +16,44 @@ an assistant proposes changes you confirm.
 | Backend | FastAPI + SQLAlchemy 2.0 async + Alembic |
 | Database | PostgreSQL 16 + pgvector (Supabase in deployment) |
 | Auth | Supabase Auth — magic link + Google |
-| LLM | Groq `openai/gpt-oss-120b`, or Gemini — set `LLM_PROVIDER` |
+| LLM | AI Credits `openai/gpt-4o-mini`, or Groq, or Gemini — set `LLM_PROVIDER` |
 | Embeddings | fastembed + `BAAI/bge-small-en-v1.5`, local — Phase 3 |
 | Agent | LangGraph + LangSmith — Phase 2/4 |
 
 Neither Groq nor most chat providers serve embedding models, which is why
 embeddings run locally rather than through the same provider.
 
-The LLM is provider-neutral because free-tier budgets differ by two orders of
-magnitude: Groq allows 8,000 tokens/minute and is fast (~2–4s), Gemini caps on
-requests rather than tokens and is roomier but slower. Both speak the OpenAI
-dialect, so switching is a key, a base URL, and a model.
+The LLM is provider-neutral because the budgets differ by orders of magnitude.
+Groq is fastest (~2–4s) but its free tier allows 8,000 tokens/minute **and**
+200,000 per day; since the assistant's tool schemas cost ~2,400 tokens per
+round, roughly forty messages exhaust a day, and the daily cap cannot be waited
+out. Gemini caps on requests rather than tokens — roomier, slower. AI Credits is
+paid (INR/UPI, ~10% over list) with no token ceiling at all, which is why it is
+the default. All three speak the OpenAI dialect, so switching is a key, a base
+URL, and a model.
+
+`openai/gpt-4o-mini` was chosen by measurement, not by price list. Four
+candidates were scored on a 10-case tool-selection eval against the real
+20-tool schema, and on salary extraction — the field most likely to be wrong
+and least likely to be re-read. Costs assume 300 assistant messages and 40
+pasted postings per month:
+
+| Model | Tool selection | Salary | Cost/month |
+| --- | --- | --- | --- |
+| `openai/gpt-oss-120b` | 9/10 | **wrong** | ₹3.62 |
+| `openai/gpt-4.1-nano` | 6/10 | ok | ₹8.08 |
+| **`openai/gpt-4o-mini`** | **10/10** | **ok** | **₹12.34** |
+| `openai/gpt-5-nano` | 9/10 | ok | ₹16.77 |
+
+Two results are worth keeping. `gpt-oss-120b` read "45–60 LPA" as 45 to 60
+rupees, reproducibly — the same model id that reads it correctly on Groq, which
+is a reminder that a gateway's model name is not a guarantee of what served the
+request. And `gpt-5-nano` costs *more* than `gpt-4o-mini` despite a lower
+headline price, because reasoning tokens are billed as output: 735 per assistant
+turn against 23.
+
+The whole spread is about ₹13/month, so nothing here was worth trading accuracy
+for.
 
 ## Getting started
 
