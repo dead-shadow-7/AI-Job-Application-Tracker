@@ -154,6 +154,18 @@ class StageOutcome(StrEnum):
     CANCELLED = "cancelled"
 
 
+class FollowUpAction(StrEnum):
+    """What a fired rule does.
+
+    SUGGEST_FOLLOWUP surfaces the application for you to act on. MARK_GHOSTED
+    is the long-stop that closes one nobody was ever going to answer, so the
+    active list stays honest rather than accumulating dead entries forever.
+    """
+
+    SUGGEST_FOLLOWUP = "suggest_followup"
+    MARK_GHOSTED = "mark_ghosted"
+
+
 class Priority(StrEnum):
     LOW = "low"
     MEDIUM = "medium"

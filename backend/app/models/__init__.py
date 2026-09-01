@@ -9,6 +9,7 @@ from app.db.base import Base
 from app.models.application import Application, ApplicationEvent, InterviewStage
 from app.models.company import Company
 from app.models.contact import Contact
+from app.models.followup import FollowUpRule
 from app.models.job import Job, JobRequirement, JobSkill
 from app.models.resume import JobEmbedding, MatchAnalysis, Resume, ResumeChunk
 from app.models.skill import Skill
@@ -20,6 +21,7 @@ __all__ = [
     "Base",
     "Company",
     "Contact",
+    "FollowUpRule",
     "InterviewStage",
     "Job",
     "JobEmbedding",
