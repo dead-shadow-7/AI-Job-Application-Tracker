@@ -1,6 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '@/lib/api'
+
+/* A backlog of ninety pushes the applications table off the screen, so the
+   panel folds. The choice is remembered, and until one is made the panel opens
+   only while it is short enough to read without scrolling past it. */
+const STORAGE_KEY = 'needs-attention:open'
+const OPEN_UP_TO = 5
 
 /**
  * The panel this whole project was described to produce:
@@ -13,6 +20,10 @@ import { api } from '@/lib/api'
  */
 export function NeedsAttention() {
   const queryClient = useQueryClient()
+  const [preference, setPreference] = useState(() => {
+    const stored = localStorage.getItem(STORAGE_KEY)
+    return stored === null ? null : stored === 'true'
+  })
 
   const attention = useQuery({ queryKey: ['needs-attention'], queryFn: api.needsAttention })
 
@@ -29,14 +40,38 @@ export function NeedsAttention() {
   if (attention.isPending || items.length === 0) return null
 
   const ghostable = items.filter((i) => i.rule_action === 'mark_ghosted')
+  const open = preference ?? items.length <= OPEN_UP_TO
+
+  function toggle() {
+    localStorage.setItem(STORAGE_KEY, String(!open))
+    setPreference(!open)
+  }
 
   return (
     <section className="rounded-xl border border-amber-200 bg-amber-50/60 p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-sm font-medium text-amber-900">
-          {items.length === 1
-            ? 'One application needs attention'
-            : `${items.length} applications need attention`}
+          <button
+            type="button"
+            onClick={toggle}
+            aria-expanded={open}
+            aria-controls="needs-attention-list"
+            className="flex items-center gap-2 text-left transition hover:text-amber-950"
+          >
+            <span aria-hidden="true" className="text-xs text-amber-700">
+              {open ? '▾' : '▸'}
+            </span>
+            {items.length === 1
+              ? 'One application needs attention'
+              : `${items.length} applications need attention`}
+            {/* The unanswered count is already on the button beside it, so the
+                fold hides only the follow-ups — say how many. */}
+            {!open && items.length > ghostable.length && (
+              <span className="font-normal text-amber-700">
+                · {items.length - ghostable.length} to follow up
+              </span>
+            )}
+          </button>
         </h2>
         {ghostable.length > 0 && (
           <button
@@ -61,7 +96,13 @@ export function NeedsAttention() {
         )}
       </div>
 
-      <ul className="mt-3 space-y-2">
+      {/* Even open, a long backlog scrolls inside the panel instead of pushing
+          the applications table below the fold. */}
+      <ul
+        id="needs-attention-list"
+        hidden={!open}
+        className="mt-3 max-h-96 space-y-2 overflow-y-auto"
+      >
         {items.map((item) => (
           <li
             key={item.application_id}
