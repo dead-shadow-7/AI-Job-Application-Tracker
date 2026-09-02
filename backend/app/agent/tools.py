@@ -19,6 +19,16 @@ a chain of three calls into one. ``compare_applications`` and
 ``prepare_interview_brief`` exist for the second reason: the model could reach
 the same facts through repeated detail lookups, but at three round trips and
 three full detail blocks apiece.
+
+The schemas are written as dicts and sent verbatim rather than generated from
+decorated functions, for one specific reason: ``_nullable`` below widens every
+optional parameter to ``["string", "null"]``, and a schema derived from Python
+type hints emits ``anyOf: [{"type": "string"}, {"type": "null"}]`` instead.
+Groq validates tool-call arguments against whichever it is given and rejects the
+entire message with a 400 on a disagreement, so the difference is not cosmetic.
+Injection is the other half: ``run_tool`` is the single place a session, a user
+id and the raw message enter a tool, and the one place "no tool writes" can be
+checked by reading.
 """
 
 import uuid

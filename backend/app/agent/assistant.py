@@ -4,6 +4,31 @@ Written out rather than delegated to a framework: it is a dozen lines, and
 keeping the stopping condition and the tool-result plumbing visible matters
 more here than the abstraction would save. The safety property — that no tool
 writes — is only obvious if you can see every tool the loop can reach.
+
+Deliberately not ``create_agent``, and this is worth stating because the model
+calls underneath it *are* LangChain now, so the absence would otherwise read as
+an oversight. Four reasons, the first of them decisive:
+
+**Tool dispatch here is serial, and that is load-bearing.** Every tool shares one
+``AsyncSession`` carrying the transaction-local ``app.user_id`` that each RLS
+policy reads. A prebuilt tool node runs a turn's calls concurrently by default —
+which on one session raises from SQLAlchemy, and on a session each exhausts a
+pool of ten while scattering the user scoping. A lock in middleware would restore
+the ordering but express it indirectly, one refactor away from being lost.
+
+**There is no native form for withdrawing text already streamed.** Models narrate
+before reaching for a tool, and that sentence is never saved; ``Superseded`` tells
+the client to take it back. Nothing in a graph's event stream means that.
+
+**Arbitration is ordered.** Only the first proposal in a turn is prepared, and the
+second is told so in its own tool result — which requires seeing the calls in
+order, as a batch.
+
+**History is budgeted in characters, not tokens**, comes from an RLS-scoped query
+rather than from graph state, and keeps at least one message however long it is.
+
+The ingestion DAG in graphs/ingestion.py *is* a LangGraph, because its retry edge
+and per-node state earn one. This does not.
 """
 
 import json

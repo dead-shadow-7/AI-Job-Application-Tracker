@@ -1,11 +1,35 @@
-"""A thin, typed Groq client.
+"""The typed façade over every model call.
 
-Groq's API is OpenAI-compatible, so this is a small amount of code rather than a
-dependency. It is written directly instead of through a LangChain chat wrapper
-for one reason: strict schema adherence is the entire value of this call, and a
-wrapper's ``with_structured_output`` may emit function-calling or loose JSON
-mode depending on version. Here the exact ``response_format`` sent is visible
-and pinned.
+LangChain carries the transport — HTTP, server-sent events, chunk accumulation,
+the OpenAI dialect all three providers speak. What stays here is what the
+framework has no way to know about this deployment, and each of the three is a
+correction rather than a preference.
+
+**The schema is built here and bound as a dict.** Not handed over as a Pydantic
+class, and not through ``with_structured_output``. A dict already shaped as a
+json_schema response format is forwarded untouched, so what
+``to_strict_json_schema`` produced is exactly what Groq receives — including the
+``$ref`` inlining its validator requires and which nothing in LangChain
+performs. The earlier objection recorded here, that a wrapper "may emit
+function-calling or loose JSON mode depending on version", is no longer true of
+``ChatOpenAI``: it defaults to strict json_schema and raises rather than
+degrading. It is still true of ``ChatGroq``, which is why Groq is reached
+through its OpenAI-compatible host instead. The reason to keep the dict is the
+inlining, not the doubt.
+
+**The retry policy is ours.** The SDK's set omits 413, which is the status Groq
+returns for token-per-minute exhaustion rather than for an oversized request,
+and running both loops would multiply the attempts inside a deadline sized for
+one of them. Its retries are switched off in ``agent/models.py``.
+
+**Truncation raises.** A reply cut at the ceiling comes back as an ordinary
+message with a field set, and the assistant loop reads empty content and no tool
+calls as "nothing to say" — answering with a shrug while the user's turn is
+already recorded.
+
+What this module deliberately does not do is orchestrate. There is no agent and
+no graph here; see ``agent/assistant.py`` for why the loop above it is written
+out rather than inherited.
 """
 
 import asyncio
@@ -27,7 +51,6 @@ from langchain_core.messages import (
 )
 from pydantic import BaseModel, ValidationError
 
-from app.agent.http_client import close_http_client, get_http_client
 from app.agent.models import ChatModel, build_chat_model, chat_model_config
 from app.agent.tracing import as_llm_run, hide, record_model, traced
 from app.core.config import settings
@@ -46,22 +69,6 @@ T = TypeVar("T", bound=BaseModel)
 # Reading it as "request too big" sends you optimising the prompt when the fix
 # is to wait or reduce max_completion_tokens.
 RETRYABLE_STATUS = {408, 409, 413, 429, 500, 502, 503, 504}
-
-# Re-exported so `app.agent.llm_client.get_http_client` stays the name this
-# module's own requests resolve at call time — which is what the transport-level
-# tests patch, and what keeps them saying nothing about how the pool is cached.
-__all__ = [
-    "LLMClient",
-    "LLMError",
-    "LLMUsage",
-    "StreamEvent",
-    "StructuredResult",
-    "TextDelta",
-    "TurnComplete",
-    "close_http_client",
-    "get_http_client",
-    "llm_client",
-]
 
 
 class LLMError(DomainError):
