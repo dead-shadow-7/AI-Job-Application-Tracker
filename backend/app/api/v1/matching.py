@@ -132,8 +132,13 @@ async def compute_match(
             logger.warning("Rubric unavailable, scoring deterministically only: %s", exc)
 
     if judgment is not None:
-        overall = combine_with_rubric(deterministic, max(0.0, min(1.0, judgment.score)))
-        subscores = {**deterministic.subscores, "rubric": judgment.score}
+        # Clamped once and used for both, so the breakdown adds up to the total.
+        # The schema says 0.0-1.0 but nothing enforces it, and storing the raw
+        # value beside a total computed from the clamped one meant a model
+        # answering 1.4 produced a card whose parts did not make its whole.
+        rubric_score = max(0.0, min(1.0, judgment.score))
+        overall = combine_with_rubric(deterministic, rubric_score)
+        subscores = {**deterministic.subscores, "rubric": rubric_score}
     else:
         overall = deterministic.overall_score
         subscores = deterministic.subscores
