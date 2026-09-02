@@ -38,7 +38,7 @@ from app.schemas.extraction import ExtractedJob, to_strict_json_schema
 # path that moves to a different builder re-points its own tests and nothing
 # else.
 EXTRACT_HTTP = "app.agent.models.get_http_client"
-CHAT_HTTP = "app.agent.llm_client.get_http_client"
+CHAT_HTTP = "app.agent.models.get_http_client"
 
 BASE_URL = "https://example.invalid/v1"
 

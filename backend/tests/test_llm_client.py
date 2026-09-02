@@ -43,7 +43,7 @@ def install(monkeypatch: pytest.MonkeyPatch, *chunks: dict[str, Any]) -> LLMClie
             )
         )
     )
-    monkeypatch.setattr("app.agent.llm_client.get_http_client", lambda: stub)
+    monkeypatch.setattr("app.agent.models.get_http_client", lambda: stub)
     return LLMClient(api_key="test-key", base_url="https://example.invalid/v1")
 
 
@@ -164,7 +164,7 @@ async def test_the_provider_s_own_error_survives_a_streamed_request(
             lambda _: httpx.Response(400, json={"error": {"message": "stream_options unsupported"}})
         )
     )
-    monkeypatch.setattr("app.agent.llm_client.get_http_client", lambda: stub)
+    monkeypatch.setattr("app.agent.models.get_http_client", lambda: stub)
     client = LLMClient(api_key="test-key", base_url="https://example.invalid/v1")
 
     with pytest.raises(LLMError, match="stream_options unsupported"):

@@ -9,7 +9,6 @@ and pinned.
 """
 
 import asyncio
-import json
 import logging
 import random
 from collections.abc import AsyncIterator
@@ -19,7 +18,13 @@ from typing import Any, TypeVar, cast
 
 import httpx
 import openai
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+)
 from pydantic import BaseModel, ValidationError
 
 from app.agent.http_client import close_http_client, get_http_client
@@ -267,33 +272,36 @@ class LLMClient:
         if not self.is_configured:
             raise LLMError("No LLM API key is configured.")
 
-        payload: dict[str, Any] = {
-            "model": model or settings.extraction_model,
-            "temperature": temperature,
+        target_model = model or settings.extraction_model
+        chat = build_chat_model(
+            model=target_model,
             # The chat ceiling, not the extraction one: rule 7 of the system
             # prompt asks for one or two sentences, and this budget is debited
             # before generation rather than after it.
-            "max_completion_tokens": max_tokens or settings.llm_chat_output_tokens,
-            "messages": messages,
-            "stream": True,
-            # Usage is omitted from a streamed response unless it is asked for.
-            # Without this every turn reports zero tokens: the cache hit rate
-            # the loop logs goes to nothing and LangSmith prices the run at
-            # zero — both silently, and exactly as the traffic moves here.
-            "stream_options": {"include_usage": True},
-        }
+            max_output_tokens=max_tokens or settings.llm_chat_output_tokens,
+            api_key=self._api_key,
+            base_url=self._base_url,
+            temperature=temperature,
+        )
         if tools:
-            payload["tools"] = tools
-            payload["tool_choice"] = "auto"
+            # Bound as raw dicts rather than through ``bind_tools``, which would
+            # convert them. The conversion is what would be lost: every optional
+            # parameter is widened to ``["string", "null"]`` because Groq
+            # validates tool arguments and rejects the whole message with a 400
+            # when a model passes null for an optional it has nothing to say
+            # about. See the schema builders in agent/tools.py.
+            chat = chat.bind(tools=tools, tool_choice="auto")
 
-        record_model(payload["model"], settings.llm_provider)
-        async for event in self._stream(payload, payload["model"]):
+        record_model(target_model, settings.llm_provider)
+        async for event in self._stream(chat, messages, target_model):
             yield event
 
-    async def _stream(self, payload: dict[str, Any], model: str) -> AsyncIterator[StreamEvent]:
+    async def _stream(
+        self, chat: ChatModel, messages: list[dict[str, Any]], model: str
+    ) -> AsyncIterator[StreamEvent]:
         """Open the stream, retrying only while nothing has been delivered.
 
-        ``_post``'s retry loop cannot simply be reused. Once a fragment has
+        ``_invoke``'s retry loop cannot simply be reused. Once a fragment has
         been handed to the caller it is already on someone's screen, and
         starting the request again would repeat it from the beginning — so a
         failure after the first fragment is reported rather than retried.
@@ -305,45 +313,43 @@ class LLMClient:
             started = perf_counter()
             delivered = False
             try:
-                # Fetched per attempt for the same reason as _post: a shutdown
-                # during the seconds this loop can sleep would otherwise leave
-                # us holding a closed client.
-                async with get_http_client().stream(
-                    "POST",
-                    f"{self._base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                    json=payload,
-                ) as response:
-                    if response.status_code != 200:
-                        # A streamed response arrives with its body unread, and
-                        # `_error_message` reads it — without this the provider's
-                        # own explanation is replaced by a ResponseNotRead.
-                        await response.aread()
-                        message = self._error_message(response)
-
-                        if response.status_code in RETRYABLE_STATUS:
-                            last_error = LLMError(message)
-                            logger.warning(
-                                "Groq %s (attempt %d/%d): %s",
-                                response.status_code,
-                                attempt + 1,
-                                settings.llm_max_retries,
-                                message,
-                            )
-                            if attempt < final_attempt:
-                                await self._backoff(attempt, response.headers.get("retry-after"))
-                            continue
-
-                        logger.error(
-                            "Groq %s rejected the request: %s", response.status_code, message
-                        )
-                        raise LLMError(message)
-
-                    async for event in self._read_stream(response, model, started):
+                # Chunks are folded together as they arrive rather than parsed
+                # by hand. Addition is what reassembles a tool call: the name
+                # lands in one chunk and its JSON arguments dribble in over the
+                # next several, keyed by position in the call list.
+                full: AIMessageChunk | None = None
+                async for streamed in chat.astream(messages, config=chat_model_config(model)):
+                    # A streaming chat model yields AIMessageChunk; the Runnable
+                    # signature is the generic one and cannot say so.
+                    chunk = cast(AIMessageChunk, streamed)
+                    full = chunk if full is None else full + chunk
+                    if chunk.text:
                         delivered = True
-                        yield event
-                    return
-            except (httpx.RequestError, RuntimeError) as exc:
+                        yield TextDelta(chunk.text)
+
+                yield self._assembled(full, model, started)
+                return
+            except openai.APIStatusError as exc:
+                # The SDK reads an error body before raising, so the provider's
+                # own explanation of which field it objected to survives — the
+                # part worth having, and the part a bare status code drops.
+                detail = self._error_message(exc.response)
+                if exc.status_code in RETRYABLE_STATUS:
+                    last_error = LLMError(detail)
+                    logger.warning(
+                        "Groq %s (attempt %d/%d): %s",
+                        exc.status_code,
+                        attempt + 1,
+                        settings.llm_max_retries,
+                        detail,
+                    )
+                    if attempt < final_attempt:
+                        await self._backoff(attempt, exc.response.headers.get("retry-after"))
+                    continue
+
+                logger.error("Groq %s rejected the request: %s", exc.status_code, detail)
+                raise LLMError(detail) from exc
+            except (openai.APIError, httpx.RequestError, RuntimeError) as exc:
                 if delivered:
                     # Half an answer is on screen. Retrying would append a
                     # second attempt to the first; saying so is the only honest
@@ -359,87 +365,61 @@ class LLMClient:
         raise LLMError(f"Groq unreachable after {settings.llm_max_retries} attempts: {last_error}")
 
     @staticmethod
-    async def _read_stream(
-        response: httpx.Response, model: str, started: float
-    ) -> AsyncIterator[StreamEvent]:
-        """Server-sent chunks into text fragments and one assembled turn.
+    def _assembled(full: AIMessageChunk | None, model: str, started: float) -> TurnComplete:
+        """The accumulated stream, back in the shape a plain completion returns.
 
-        Tool calls are the fiddly part: the name arrives in one chunk and the
-        JSON arguments dribble in over the next several, keyed by their index
-        in the call list. They are rebuilt here so that nothing above this line
-        has to know the difference.
+        Translated rather than passed through, so that nothing above this line
+        has to know a turn arrived in a few hundred pieces — or which library
+        delivered it. Three details are each a silent bug if taken from the
+        convenient field instead:
+
+        ``content`` must be ``None`` and not ``""`` on a tool-calls-only turn.
+        The accumulator's default is the empty string, and the chat stub the
+        assistant tests run against emits ``None`` — a divergence there would let
+        the loop depend on a shape the real client never sends.
+
+        ``arguments`` must be the raw accumulated string, taken from
+        ``tool_call_chunks`` rather than re-serialised from the parsed
+        ``tool_calls``. The parser turns arguments cut mid-JSON into an empty
+        object, which reads exactly like a call that legitimately had none; the
+        loop's own decoder is what is supposed to notice, and it can only notice
+        the original text.
+
+        Truncation raises here, after the stream has drained and before the turn
+        is handed over, because a tool call cut mid-JSON either fails to parse or
+        parses into arguments nobody asked for.
         """
-        content: list[str] = []
-        tool_calls: dict[int, dict[str, Any]] = {}
-        finish_reason: str | None = None
-        raw_usage: dict[str, Any] = {}
+        if full is None:
+            # An empty stream. Reported as an empty turn, as it always was: the
+            # loop stops, and the caller answers that it found nothing to say.
+            full = AIMessageChunk(content="")
 
-        async for line in response.aiter_lines():
-            if not line.startswith("data:"):
-                continue
-            data = line[len("data:") :].strip()
-            if data == "[DONE]":
-                break
-
-            try:
-                chunk = json.loads(data)
-            except json.JSONDecodeError:
-                logger.warning("Ignoring an unparseable stream chunk from %s", model)
-                continue
-
-            # Arrives as a final chunk carrying no choices, because of
-            # stream_options above.
-            raw_usage = chunk.get("usage") or raw_usage
-
-            for choice in chunk.get("choices") or []:
-                finish_reason = choice.get("finish_reason") or finish_reason
-                delta = choice.get("delta") or {}
-
-                if text := delta.get("content"):
-                    content.append(text)
-                    yield TextDelta(text)
-
-                for call in delta.get("tool_calls") or []:
-                    slot = tool_calls.setdefault(
-                        call.get("index", 0),
-                        {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
-                    )
-                    if call.get("id"):
-                        slot["id"] = call["id"]
-                    fragment = call.get("function") or {}
-                    if fragment.get("name"):
-                        slot["function"]["name"] = fragment["name"]
-                    # Concatenated rather than assigned: this is one JSON object
-                    # arriving a few characters at a time.
-                    slot["function"]["arguments"] += fragment.get("arguments") or ""
-
-        # The same guard the non-streamed path carries, and streaming does not
-        # retire it. A truncated sentence is at least visible; a tool call cut
-        # mid-JSON either fails to parse or parses into arguments nobody asked
-        # for, and neither announces itself.
-        if finish_reason == "length":
+        if full.response_metadata.get("finish_reason") == "length":
             raise LLMError(
                 f"{model} hit the output ceiling before finishing. "
                 "Ask for less at once, or raise LLM_CHAT_OUTPUT_TOKENS."
             )
 
-        message: dict[str, Any] = {"role": "assistant", "content": "".join(content) or None}
-        if tool_calls:
-            message["tool_calls"] = [tool_calls[index] for index in sorted(tool_calls)]
+        message: dict[str, Any] = {"role": "assistant", "content": full.text or None}
+        if full.tool_call_chunks:
+            message["tool_calls"] = [
+                {
+                    "id": call.get("id") or "",
+                    "type": "function",
+                    "function": {
+                        "name": call.get("name") or "",
+                        "arguments": call.get("args") or "",
+                    },
+                }
+                for call in sorted(full.tool_call_chunks, key=lambda c: c.get("index") or 0)
+            ]
 
-        cached = (raw_usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0)
-        yield TurnComplete(
+        return TurnComplete(
             message=message,
-            usage=LLMUsage(
-                model=model,
-                prompt_tokens=raw_usage.get("prompt_tokens", 0),
-                completion_tokens=raw_usage.get("completion_tokens", 0),
-                total_tokens=raw_usage.get("total_tokens", 0),
-                cached_tokens=cached,
-                # `response.elapsed` is only populated once a streamed response
-                # is closed, which is after this line runs.
-                latency_ms=int((perf_counter() - started) * 1000),
-            ),
+            # `perf_counter` rather than the response's own elapsed time, which
+            # is only populated once a streamed response has closed — after the
+            # last chunk this method is assembling.
+            usage=_usage_of(full, model, int((perf_counter() - started) * 1000)),
         )
 
     async def _invoke(
