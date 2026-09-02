@@ -17,16 +17,33 @@ dependencies = [
     "pyjwt[crypto]>=2.9",
     "httpx>=0.27",
     "python-json-logger>=2.0",
-    # Phase 2. LangGraph orchestrates the ingestion DAG and will carry the
-    # Phase 4 agent; LangSmith gives per-run tracing and token cost.
+    # LangGraph orchestrates the ingestion DAG; LangSmith gives per-run tracing
+    # and token cost. The floors are 1.x because langchain-core 1.x requires it
+    # — these three move together and cannot be pinned independently.
+    "langgraph>=1.2.11",
+    "langsmith>=0.3.45",
+    # The transport for every model call. One ChatOpenAI pointed at three base
+    # URLs, matching the provider table in core/config.py.
     #
-    # Deliberately no langchain-groq. Groq's API is OpenAI-compatible and the
-    # exact request shape for strict `json_schema` is verified working, so the
-    # LLM call is a thin typed client (agent/groq_client.py) rather than a
-    # wrapper whose structured-output method may or may not emit strict:true.
-    # Schema adherence is the entire value here; it should not be inferred.
-    "langgraph>=0.2.60",
-    "langsmith>=0.2",
+    # Deliberately no langchain-groq. ChatGroq defaults to method="function_calling"
+    # and silently downgrades strict=True to None for every model except two —
+    # which is precisely the failure this codebase pins its own response_format
+    # to avoid. ChatOpenAI defaults to json_schema and raises rather than
+    # degrading, so the provider's own base URL is the safer route to Groq.
+    #
+    # No `langchain` either: that package exists for create_agent, and the
+    # assistant loop is deliberately not one. See agent/assistant.py.
+    "langchain-core>=1.6.1",
+    "langchain-openai>=1.6.0",
+    # Pinned below 3 on purpose. openai 3.x is built on the `httpx2`
+    # distribution, and objects handed to the SDK client must come from the same
+    # httpx as the SDK uses. Staying on 2.x keeps the pooled, event-loop-keyed
+    # AsyncClient in agent/llm_client.py injectable as `http_async_client`,
+    # which is what carries the connection pool, the split connect/read timeout
+    # and the loop keying across from the hand-rolled client. Lifting this pin
+    # is not a version bump; it is a rehoming of all three.
+    # tests/test_dependencies.py fails the day it drifts.
+    "openai>=2.45,<3",
     # Phase 3. fastembed runs BAAI/bge-small-en-v1.5 locally on ONNX — no
     # PyTorch, no API key, no per-call cost, and no third party sees a resume.
     # This is why the image pins Python 3.12: onnxruntime publishes no wheels

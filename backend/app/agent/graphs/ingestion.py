@@ -16,7 +16,7 @@ agentic work the same runtime.
 import logging
 from typing import Annotated, Any, TypedDict
 
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END, START, StateGraph
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agent.llm_client import LLMClient, LLMError, LLMUsage, llm_client
@@ -207,7 +207,7 @@ def build_ingestion_graph() -> Any:
     graph.add_node("resolve_skills", resolve_skills_node)
     graph.add_node("failed", fail_node)
 
-    graph.set_entry_point("normalize")
+    graph.add_edge(START, "normalize")
     graph.add_conditional_edges(
         "normalize",
         lambda s: "failed" if s.get("error") else "extract",

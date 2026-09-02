@@ -55,9 +55,28 @@ os.environ["ENVIRONMENT"] = "ci"
 # traffic, burning retention on runs nobody will ever read. Set on the process
 # rather than through Settings because the SDK reads the environment directly
 # and starts tracing on first import, before any application code runs.
-os.environ["LANGSMITH_TRACING"] = "false"
-os.environ["LANGCHAIN_TRACING_V2"] = "false"  # the older name, still honoured
-os.environ.pop("LANGSMITH_API_KEY", None)
+#
+# Both spellings of every flag, because the SDK resolves LANGSMITH_* and
+# LANGCHAIN_* as aliases and honours whichever it finds first — and langchain-core
+# starts a tracer of its own on import, which the hand-written client never did.
+# Clearing the keys as well as the flags means a stray flag cannot resurrect
+# tracing on its own.
+for _flag in (
+    "LANGSMITH_TRACING",
+    "LANGSMITH_TRACING_V2",
+    "LANGCHAIN_TRACING",
+    "LANGCHAIN_TRACING_V2",
+):
+    os.environ[_flag] = "false"
+for _key in (
+    "LANGSMITH_API_KEY",
+    "LANGCHAIN_API_KEY",
+    "LANGSMITH_ENDPOINT",
+    "LANGCHAIN_ENDPOINT",
+    "LANGSMITH_PROJECT",
+    "LANGCHAIN_PROJECT",
+):
+    os.environ.pop(_key, None)
 
 import asyncio  # noqa: E402
 import hashlib  # noqa: E402

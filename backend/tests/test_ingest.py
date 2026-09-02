@@ -376,3 +376,23 @@ async def test_missing_company_is_rejected_at_save_not_at_preview(
 
     assert rejected.status_code == 422
     assert accepted.status_code == 201
+
+
+def test_the_graph_keeps_its_shape_across_a_langgraph_upgrade() -> None:
+    """The DAG's topology, asserted rather than trusted to a minor version.
+
+    LangGraph reached 1.x under a floor of `>=0.2.60`, so the runtime moved a
+    major version without the pin ever changing. It happened to be compatible.
+    The next one might not be, and a retry edge that quietly stopped existing
+    would show up as extractions that never retry — not as an error.
+    """
+    from app.agent.graphs.ingestion import get_ingestion_graph
+
+    edges = {(edge.source, edge.target) for edge in get_ingestion_graph().get_graph().edges}
+
+    assert ("__start__", "normalize") in edges
+    assert ("extract", "validate") in edges
+    assert ("validate", "extract") in edges, "the extraction retry edge"
+    assert ("resolve_company", "resolve_skills") in edges
+    assert ("resolve_skills", "__end__") in edges
+    assert ("failed", "__end__") in edges

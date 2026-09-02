@@ -96,11 +96,22 @@ def test_the_suite_does_not_write_traces() -> None:
 
     Guarding the environment variable rather than the behaviour because that is
     where the mistake would be: the SDK reads it directly, at import.
+
+    Both spellings of each name, because they are aliases and the SDK honours
+    whichever it sees. Now that langchain-core is in the tree it starts a tracer
+    of its own on import, so a single unguarded alias is enough to leak.
     """
     import os
 
-    assert os.environ.get("LANGSMITH_TRACING") == "false"
-    assert not os.environ.get("LANGSMITH_API_KEY")
+    for flag in (
+        "LANGSMITH_TRACING",
+        "LANGSMITH_TRACING_V2",
+        "LANGCHAIN_TRACING",
+        "LANGCHAIN_TRACING_V2",
+    ):
+        assert os.environ.get(flag) == "false", flag
+    for key in ("LANGSMITH_API_KEY", "LANGCHAIN_API_KEY", "LANGSMITH_PROJECT", "LANGCHAIN_PROJECT"):
+        assert not os.environ.get(key), key
 
 
 def test_models_are_overridable_per_provider() -> None:
