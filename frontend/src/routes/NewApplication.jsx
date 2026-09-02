@@ -1,17 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Check } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { PageHeader } from '@/components/PageHeader'
 import { api } from '@/lib/api'
 
 const FIELD =
-  'w-full rounded-lg border border-border-subtle px-3 py-2 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20'
+  'well w-full rounded-xl px-3 py-2.5 text-sm outline-none transition placeholder:text-ink-faint focus:border-accent/40 focus:shadow-[0_0_0_3px] focus:shadow-accent/12 focus-visible:outline-none'
 
 function Field({ label, hint, children }) {
   return (
-    <label className="block space-y-1.5">
+    <label className="block space-y-2">
       <span className="block text-sm font-medium">{label}</span>
       {children}
-      {hint && <span className="block text-xs text-ink-muted">{hint}</span>}
+      {hint && <span className="block text-xs text-ink-faint">{hint}</span>}
     </label>
   )
 }
@@ -99,19 +101,15 @@ export function NewApplication() {
   )
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <div>
-        <Link to="/" className="text-sm text-ink-muted hover:text-accent">
-          ← Applications
-        </Link>
-        <h1 className="mt-2 text-lg font-semibold tracking-tight">Track a job</h1>
-        <p className="mt-0.5 text-sm text-ink-muted">
-          Entered by hand for now. Phase 2 fills all of this from a pasted job description.
-        </p>
-      </div>
+    <div className="mx-auto max-w-3xl space-y-5">
+      <PageHeader
+        back={{ to: '/', label: 'Applications' }}
+        title="Track a job"
+        subtitle="Everything here is optional except the company and the role. To fill it in automatically, paste the posting instead."
+      />
 
-      <form onSubmit={submit} className="space-y-6">
-        <section className="space-y-4 rounded-xl border border-border-subtle bg-surface p-5">
+      <form onSubmit={submit} className="space-y-5">
+        <section className="glass space-y-4 rounded-2xl p-5">
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Company">
               <input required value={form.company_name} onChange={set('company_name')} className={FIELD} placeholder="Amazon" />
@@ -162,8 +160,8 @@ export function NewApplication() {
           </div>
         </section>
 
-        <section className="space-y-4 rounded-xl border border-border-subtle bg-surface p-5">
-          <h2 className="text-sm font-medium">Compensation</h2>
+        <section className="glass space-y-4 rounded-2xl p-5">
+          <h2 className="text-sm font-semibold">Compensation</h2>
           <div className="grid gap-4 sm:grid-cols-4">
             <Field label="Min">
               <input type="number" min="0" value={form.salary_min} onChange={set('salary_min')} className={FIELD} placeholder="1800000" />
@@ -184,13 +182,13 @@ export function NewApplication() {
               </select>
             </Field>
           </div>
-          <p className="text-xs text-ink-muted">
+          <p className="text-xs text-ink-faint">
             Leave blank if the posting did not say. A guessed number is worse than none.
           </p>
         </section>
 
-        <section className="space-y-4 rounded-xl border border-border-subtle bg-surface p-5">
-          <h2 className="text-sm font-medium">Requirements</h2>
+        <section className="glass space-y-4 rounded-2xl p-5">
+          <h2 className="text-sm font-semibold">Requirements</h2>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Must-haves" hint="One per line">
               <textarea rows={4} value={form.must_haves} onChange={set('must_haves')} className={FIELD} placeholder={'3+ years Python\nStrong SQL'} />
@@ -208,7 +206,7 @@ export function NewApplication() {
               placeholder="Filter skills…"
             />
           </Field>
-          <div className="max-h-44 overflow-y-auto rounded-lg border border-border-subtle p-2">
+          <div className="well max-h-44 overflow-y-auto rounded-xl p-2.5">
             <div className="flex flex-wrap gap-1.5">
               {visibleSkills.map((skill) => {
                 const on = selectedSkills.includes(skill.slug)
@@ -222,10 +220,10 @@ export function NewApplication() {
                         on ? s.filter((x) => x !== skill.slug) : [...s, skill.slug],
                       )
                     }
-                    className={`rounded-full px-2.5 py-1 text-xs ring-1 ring-inset transition ${
+                    className={`cursor-pointer rounded-full px-2.5 py-1 text-xs ring-1 ring-inset transition ${
                       on
-                        ? 'bg-accent text-white ring-accent'
-                        : 'bg-surface text-ink-muted ring-border-subtle hover:bg-surface-muted'
+                        ? 'bg-accent font-medium text-accent-ink ring-accent'
+                        : 'text-ink-muted ring-border-subtle hover:bg-surface-muted/60 hover:text-ink'
                     }`}
                   >
                     {skill.name}
@@ -240,8 +238,8 @@ export function NewApplication() {
           </Field>
         </section>
 
-        <section className="space-y-4 rounded-xl border border-border-subtle bg-surface p-5">
-          <h2 className="text-sm font-medium">Status</h2>
+        <section className="glass space-y-4 rounded-2xl p-5">
+          <h2 className="text-sm font-semibold">Status</h2>
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Starting point">
               <select value={form.initial_event} onChange={set('initial_event')} className={FIELD}>
@@ -265,20 +263,27 @@ export function NewApplication() {
         </section>
 
         {create.error && (
-          <p className="rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700" role="alert">
+          <p
+            className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger"
+            role="alert"
+          >
             {create.error.message}
           </p>
         )}
 
         <div className="flex justify-end gap-3">
-          <Link to="/" className="rounded-lg border border-border-subtle px-4 py-2 text-sm font-medium transition hover:bg-surface-muted">
+          <Link
+            to="/"
+            className="rounded-xl border border-border-subtle px-4 py-2.5 text-sm font-medium text-ink-muted transition hover:border-border-strong hover:text-ink"
+          >
             Cancel
           </Link>
           <button
             type="submit"
             disabled={create.isPending}
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-60"
+            className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-accent-ink transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
+            <Check size={16} aria-hidden="true" />
             {create.isPending ? 'Saving…' : 'Track this job'}
           </button>
         </div>

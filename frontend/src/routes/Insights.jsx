@@ -1,6 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
+import { Info } from 'lucide-react'
 import { Link } from 'react-router-dom'
 import { ErrorState } from '@/components/ErrorState'
+import { PageHeader } from '@/components/PageHeader'
 import { Spinner } from '@/components/Spinner'
 import { api } from '@/lib/api'
 import { STATUS_LABELS } from '@/lib/format'
@@ -9,15 +11,15 @@ import { STATUS_LABELS } from '@/lib/format'
    backend emits. Rendered whole, including the zeros: a funnel with stages
    missing reads as data loss rather than as a stage nobody reached. */
 const FUNNEL_TONE = {
-  saved: 'bg-slate-300',
-  applied: 'bg-blue-400',
-  screening: 'bg-indigo-400',
-  interviewing: 'bg-violet-400',
-  offer: 'bg-amber-400',
-  accepted: 'bg-emerald-500',
-  rejected: 'bg-rose-400',
-  withdrawn: 'bg-slate-300',
-  ghosted: 'bg-orange-300',
+  saved: 'bg-slate-400',
+  applied: 'bg-sky-400',
+  screening: 'bg-cyan-400',
+  interviewing: 'bg-teal-400',
+  offer: 'bg-signal',
+  accepted: 'bg-positive',
+  rejected: 'bg-danger',
+  withdrawn: 'bg-slate-500',
+  ghosted: 'bg-orange-400',
 }
 
 export function Insights() {
@@ -30,9 +32,9 @@ export function Insights() {
 
   if (data.total === 0) {
     return (
-      <div className="rounded-xl border border-dashed border-border-subtle bg-surface p-10 text-center">
-        <p className="text-sm font-medium">Nothing to analyse yet</p>
-        <p className="mt-1 text-sm text-ink-muted">
+      <div className="glass rounded-2xl border-dashed p-12 text-center">
+        <p className="font-display text-base font-semibold">Nothing to analyse yet</p>
+        <p className="mt-1.5 text-sm text-ink-muted">
           These figures come from your own application history.{' '}
           <Link to="/" className="font-medium text-accent hover:underline">
             Track a job
@@ -47,18 +49,17 @@ export function Insights() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-lg font-semibold tracking-tight">Insights</h1>
-        <p className="mt-0.5 text-sm text-ink-muted">
-          Computed from your timeline events — nothing here is a model&rsquo;s opinion.
-        </p>
-      </div>
+      <PageHeader
+        title="Insights"
+        subtitle="Computed from your timeline events — nothing here is a model’s opinion."
+      />
 
       {/* The caveat leads rather than sits in a footnote. A response rate over
           three applications is noise, and a dashboard that presents noise
           confidently gets believed and then acted on. */}
       {data.caveat && (
-        <p className="rounded-xl border border-amber-200 bg-amber-50/60 px-4 py-3 text-sm text-amber-900">
+        <p className="flex gap-2.5 rounded-xl border border-signal/30 bg-signal/8 px-4 py-3 text-sm text-signal">
+          <Info size={16} aria-hidden="true" className="mt-0.5 shrink-0" />
           {data.caveat}
         </p>
       )}
@@ -91,9 +92,9 @@ export function Insights() {
         <Metric label="Tracked" value={String(data.total)} detail={`${data.submitted} applied`} />
       </div>
 
-      <section className="rounded-xl border border-border-subtle bg-surface p-5">
-        <h2 className="text-sm font-medium">Where they stand</h2>
-        <p className="mt-0.5 text-xs text-ink-muted">
+      <section className="glass rounded-2xl p-5">
+        <h2 className="text-sm font-semibold">Where they stand</h2>
+        <p className="mt-1 text-xs text-ink-faint">
           Current status of every tracked application.
         </p>
 
@@ -106,10 +107,12 @@ export function Insights() {
               <dt className={stage.count === 0 ? 'text-ink-muted opacity-60' : 'text-ink-muted'}>
                 {STATUS_LABELS[stage.status] ?? stage.status}
               </dt>
-              <div className="h-2 rounded-full bg-surface-muted" aria-hidden="true">
+              <div className="h-2 overflow-hidden rounded-full bg-canvas/50" aria-hidden="true">
                 {stage.count > 0 && (
                   <div
-                    className={`h-2 rounded-full ${FUNNEL_TONE[stage.status] ?? 'bg-slate-300'}`}
+                    className={`h-2 rounded-full transition-[width] duration-500 ease-out ${
+                      FUNNEL_TONE[stage.status] ?? 'bg-slate-400'
+                    }`}
                     style={{ width: `${Math.max(3, (stage.count / peak) * 100)}%` }}
                   />
                 )}
@@ -126,9 +129,9 @@ export function Insights() {
         </dl>
       </section>
 
-      <section className="rounded-xl border border-border-subtle bg-surface p-5">
-        <h2 className="text-sm font-medium">By platform</h2>
-        <p className="mt-0.5 text-xs text-ink-muted">
+      <section className="glass rounded-2xl p-5">
+        <h2 className="text-sm font-semibold">By platform</h2>
+        <p className="mt-1 text-xs text-ink-faint">
           Which sources actually get you a reply. Only applications you sent are counted.
         </p>
 
@@ -138,18 +141,18 @@ export function Insights() {
           </p>
         ) : (
           <table className="mt-4 w-full text-sm">
-            <thead className="border-b border-border-subtle text-left text-xs text-ink-muted">
-              <tr>
-                <th scope="col" className="py-2 font-medium">Platform</th>
-                <th scope="col" className="py-2 text-right font-medium">Applied</th>
-                <th scope="col" className="py-2 text-right font-medium">Replied</th>
-                <th scope="col" className="py-2 text-right font-medium">Rate</th>
+            <thead>
+              <tr className="border-b border-border-subtle/70 text-left text-[10px] font-semibold tracking-[0.12em] text-ink-faint uppercase">
+                <th scope="col" className="py-2.5">Platform</th>
+                <th scope="col" className="py-2.5 text-right">Applied</th>
+                <th scope="col" className="py-2.5 text-right">Replied</th>
+                <th scope="col" className="py-2.5 text-right">Rate</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-border-subtle">
+            <tbody className="divide-y divide-border-subtle/50">
               {data.by_platform.map((row) => (
-                <tr key={row.platform}>
-                  <td className="py-2">
+                <tr key={row.platform} className="transition hover:bg-white/4">
+                  <td className="py-2.5">
                     {row.platform === 'unknown' ? (
                       <span
                         className="text-ink-muted"
@@ -161,11 +164,11 @@ export function Insights() {
                       row.platform
                     )}
                   </td>
-                  <td className="py-2 text-right tabular-nums text-ink-muted">
+                  <td className="py-2.5 text-right text-ink-muted tabular-nums">
                     {row.applications}
                   </td>
-                  <td className="py-2 text-right tabular-nums text-ink-muted">{row.responses}</td>
-                  <td className="py-2 text-right tabular-nums">
+                  <td className="py-2.5 text-right text-ink-muted tabular-nums">{row.responses}</td>
+                  <td className="py-2.5 text-right font-medium tabular-nums">
                     {row.response_rate == null ? '—' : `${Math.round(row.response_rate * 100)}%`}
                   </td>
                 </tr>
@@ -178,7 +181,7 @@ export function Insights() {
       {/* Named rather than silently absent, so the gap does not read as a bug.
           These need a corpus to say anything true; below roughly fifty
           applications they would produce confident nonsense. */}
-      <p className="text-xs text-ink-muted">
+      <p className="text-xs text-ink-faint">
         Rejection patterns, skill trends and recommendations are deliberately not here yet — they
         need far more history than {data.total} {data.total === 1 ? 'application' : 'applications'}{' '}
         before they would say anything true.
@@ -189,16 +192,16 @@ export function Insights() {
 
 function Metric({ label, value, detail, muted = false }) {
   return (
-    <div className="rounded-xl border border-border-subtle bg-surface p-4">
-      <p className="text-xs text-ink-muted">{label}</p>
+    <div className="glass rounded-2xl p-4">
+      <p className="text-[10px] font-semibold tracking-[0.12em] text-ink-faint uppercase">{label}</p>
       <p
-        className={`mt-1 text-2xl font-semibold tabular-nums ${
-          value == null ? 'text-ink-muted' : muted ? 'text-ink opacity-70' : 'text-ink'
+        className={`mt-2 text-2xl leading-none font-medium tabular-nums ${
+          value == null ? 'text-ink-faint' : muted ? 'text-ink-muted' : 'text-accent'
         }`}
       >
         {value ?? '—'}
       </p>
-      <p className="mt-0.5 text-xs text-ink-muted">{detail}</p>
+      <p className="mt-2 text-xs text-ink-faint">{detail}</p>
     </div>
   )
 }

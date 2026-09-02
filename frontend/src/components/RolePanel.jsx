@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Pencil, X } from 'lucide-react'
 import { useState } from 'react'
 import { api } from '@/lib/api'
 
 const FIELD =
-  'w-full rounded-lg border border-border-subtle px-3 py-2 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20'
+  'well w-full rounded-xl px-3 py-2.5 text-sm outline-none transition placeholder:text-ink-faint focus:border-accent/40 focus:shadow-[0_0_0_3px] focus:shadow-accent/12 focus-visible:outline-none'
 
 /**
  * What the role asks for — readable, and correctable.
@@ -67,20 +68,21 @@ export function RolePanel({ job }) {
 
   if (!editing) {
     return (
-      <section className="rounded-xl border border-border-subtle bg-surface p-5">
+      <section className="glass rounded-2xl p-5">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-medium">The role</h2>
+          <h2 className="text-sm font-semibold">The role</h2>
           <button
             type="button"
             onClick={open}
-            className="rounded-lg border border-border-subtle px-2.5 py-1 text-xs transition hover:bg-surface-muted"
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border-subtle px-2.5 py-1.5 text-xs text-ink-muted transition hover:border-border-strong hover:text-ink"
           >
+            <Pencil size={12} aria-hidden="true" />
             Edit
           </button>
         </div>
 
         {!hasContent && (
-          <p className="mt-3 text-sm text-ink-muted">
+          <p className="mt-3 text-sm text-ink-faint">
             Nothing recorded about what this role wants. Add it here, or paste the posting to the
             assistant and it will extract the lot.
           </p>
@@ -95,12 +97,14 @@ export function RolePanel({ job }) {
 
         {job.skills.length > 0 && (
           <div className="mt-4">
-            <h3 className="text-xs font-medium text-ink-muted">Skills</h3>
+            <h3 className="text-[10px] font-semibold tracking-[0.12em] text-ink-faint uppercase">
+              Skills
+            </h3>
             <div className="mt-1.5 flex flex-wrap gap-1.5">
               {job.skills.map(({ skill }) => (
                 <span
                   key={skill.id}
-                  className="rounded-full bg-surface-muted px-2.5 py-1 text-xs text-ink-muted"
+                  className="rounded-full bg-surface-muted/70 px-2.5 py-1 text-xs text-ink-muted ring-1 ring-border-subtle/60 ring-inset"
                 >
                   {skill.name}
                 </span>
@@ -110,7 +114,9 @@ export function RolePanel({ job }) {
         )}
 
         {job.description && (
-          <p className="mt-4 whitespace-pre-wrap text-sm text-ink-muted">{job.description}</p>
+          <p className="mt-4 border-t border-border-subtle/70 pt-4 text-sm leading-relaxed whitespace-pre-wrap text-ink-muted">
+            {job.description}
+          </p>
         )}
       </section>
     )
@@ -120,9 +126,9 @@ export function RolePanel({ job }) {
   const chosen = new Set(skills)
 
   return (
-    <section className="rounded-xl border border-border-subtle bg-surface p-5">
-      <h2 className="text-sm font-medium">Edit the role</h2>
-      <p className="mt-0.5 text-xs text-ink-muted">
+    <section className="glass rounded-2xl p-5">
+      <h2 className="text-sm font-semibold">Edit the role</h2>
+      <p className="mt-1 text-xs text-ink-faint">
         One requirement per line. Skills drive the match score, so removing one that is not really
         asked for changes what you are measured against.
       </p>
@@ -158,7 +164,7 @@ export function RolePanel({ job }) {
         <div>
           <span className="text-xs text-ink-muted">Skills</span>
           {taxonomy.isPending ? (
-            <p className="mt-1 text-sm text-ink-muted">Loading the skill list…</p>
+            <p className="mt-1 text-sm text-ink-faint">Loading the skill list…</p>
           ) : (
             <>
               {skills.length > 0 && (
@@ -168,9 +174,11 @@ export function RolePanel({ job }) {
                       key={slug}
                       type="button"
                       onClick={() => setSkills((s) => s.filter((x) => x !== slug))}
-                      className="rounded-full bg-accent/10 px-2.5 py-1 text-xs text-accent ring-1 ring-inset ring-accent/20 transition hover:bg-accent/20"
+                      title="Remove this skill"
+                      className="inline-flex cursor-pointer items-center gap-1 rounded-full bg-accent/10 px-2.5 py-1 text-xs text-accent ring-1 ring-accent/20 ring-inset transition hover:bg-accent/20"
                     >
-                      {known.find((s) => s.slug === slug)?.name ?? slug} ✕
+                      {known.find((s) => s.slug === slug)?.name ?? slug}
+                      <X size={11} aria-hidden="true" />
                     </button>
                   ))}
                 </div>
@@ -211,7 +219,10 @@ export function RolePanel({ job }) {
         </label>
 
         {error && (
-          <p className="rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700" role="alert">
+          <p
+            className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
+            role="alert"
+          >
             {error}
           </p>
         )}
@@ -220,14 +231,14 @@ export function RolePanel({ job }) {
           <button
             type="submit"
             disabled={save.isPending}
-            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-60"
+            className="cursor-pointer rounded-lg bg-accent px-3.5 py-2 text-sm font-semibold text-accent-ink transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
             {save.isPending ? 'Saving…' : 'Save'}
           </button>
           <button
             type="button"
             onClick={() => setEditing(false)}
-            className="rounded-lg border border-border-subtle px-3 py-1.5 text-sm transition hover:bg-surface-muted"
+            className="cursor-pointer rounded-lg border border-border-subtle px-3.5 py-2 text-sm text-ink-muted transition hover:border-border-strong hover:text-ink"
           >
             Cancel
           </button>
@@ -250,14 +261,19 @@ function RequirementList({ title, items }) {
   if (items.length === 0) return null
   return (
     <div>
-      <h3 className="text-xs font-medium text-ink-muted">{title}</h3>
-      <ul className="mt-1.5 space-y-1 text-sm">
+      <h3 className="text-[10px] font-semibold tracking-[0.12em] text-ink-faint uppercase">
+        {title}
+      </h3>
+      <ul className="mt-2 space-y-1.5 text-sm">
         {items.map((item) => (
-          <li key={item.id ?? item.text} className="flex gap-2">
-            <span aria-hidden="true" className="text-ink-muted">
-              ·
-            </span>
-            {item.text}
+          <li key={item.id ?? item.text} className="flex gap-2.5">
+            <span
+              aria-hidden="true"
+              className={`mt-2 size-1 shrink-0 rounded-full ${
+                title === 'Must have' ? 'bg-accent' : 'bg-ink-faint'
+              }`}
+            />
+            <span className="min-w-0">{item.text}</span>
           </li>
         ))}
       </ul>

@@ -1,10 +1,22 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  ArrowUp,
+  Check,
+  ChevronDown,
+  FileText,
+  Search,
+  ShieldAlert,
+  Sparkles,
+  Trash2,
+  TriangleAlert,
+  X,
+} from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Markdown } from '@/components/Markdown'
 import { api } from '@/lib/api'
 
 /**
- * The assistant drawer.
+ * The assistant.
  *
  * Nothing here writes on its own. A message gets an answer, or a confirm card
  * describing the exact change that would be made. The card renders the
@@ -21,6 +33,10 @@ import { api } from '@/lib/api'
  * model call plus tool, and the old "Thinking…" line spent all of it saying
  * nothing — indistinguishable, from where the user sits, from a request that
  * had already failed.
+ *
+ * The panel fills whatever box the shell gives it — a docked column on a wide
+ * screen, a sheet on a narrow one. `onClose` is passed only in the second case;
+ * a column has nothing to close.
  */
 // Mirrors MAX_MESSAGE_CHARS in backend/app/schemas/agent.py. Enforced here so
 // the limit is a full box rather than a red validation error after you have
@@ -44,13 +60,24 @@ const STICK_WITHIN = 64
 // so in practice this only fires when frames are not running at all.
 const DRAIN_CEILING_MS = 2_000
 
-export function AgentChat({ open, onClose }) {
+/* The empty state. Clickable rather than printed, because the hard part of a
+   blank assistant is not knowing what to type — and retyping an example by
+   hand to find out is a tax on the one moment you know least. */
+const OPENERS = [
+  'How is my search actually going?',
+  'What should I learn next?',
+  'Draft a follow-up for Amazon',
+  'Compare my two most recent applications',
+]
+
+export function AgentChat({ onClose }) {
   const queryClient = useQueryClient()
   const [turns, setTurns] = useState([])
   const [draft, setDraft] = useState('')
   const inputRef = useRef(null)
   const scrollRef = useRef(null)
   const stickRef = useRef(true)
+  const [pinned, setPinned] = useState(true)
 
   /* The turn in flight. `liveText` is what is on screen, which lags what has
      arrived — see the pump below. Tools are mirrored into a ref because the
@@ -65,7 +92,7 @@ export function AgentChat({ open, onClose }) {
   const settleRef = useRef(null)
 
   /* One character-advancing frame. Reschedules itself while it is behind and
-     stops when it catches up, so an idle drawer costs nothing. */
+     stops when it catches up, so an idle panel costs nothing. */
   const pump = useCallback(function advance() {
     const behind = receivedRef.current.length - shownRef.current.length
     if (behind > 0) {
@@ -182,6 +209,7 @@ export function AgentChat({ open, onClose }) {
     onMutate: (message) => {
       clearLive()
       stickRef.current = true
+      setPinned(true)
       setTurns((t) => [...t, { role: 'you', text: message }])
     },
     onSuccess: (reply) => {
@@ -240,187 +268,178 @@ export function AgentChat({ open, onClose }) {
       setTurns((t) => [...t, { role: 'agent', text: error.message, isError: true }]),
   })
 
-  function submit() {
-    const message = draft.trim()
+  function submit(text) {
+    const message = (text ?? draft).trim()
     if (!message || send.isPending) return
     send.mutate(message)
     setDraft('')
   }
 
-  if (!open) return null
-
-  /* max-w-xl rather than max-w-md: the drawer now renders whole job
-     descriptions, and 28rem wraps a posting into a column too narrow to read. */
   return (
-    <aside
-      className="fixed inset-y-0 right-0 z-30 flex w-full max-w-xl flex-col border-l border-border-subtle bg-surface shadow-xl"
-      role="dialog"
+    <section
+      className="glass-panel relative flex h-full flex-col overflow-hidden rounded-2xl"
       aria-label="Assistant"
     >
-      <header className="flex items-center justify-between border-b border-border-subtle px-4 py-3">
-        <div>
-          <h2 className="text-sm font-semibold">Assistant</h2>
-          <p className="text-xs text-ink-muted">Proposes changes; you confirm them.</p>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-lg border border-border-subtle px-2.5 py-1 text-sm transition hover:bg-surface-muted"
-          aria-label="Close assistant"
+      {/* The panel's status light: a hairline along its top edge that breathes
+          while a turn is in flight. The one moving thing in the interface, and
+          it means exactly one thing. */}
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-x-8 top-0 h-px bg-linear-to-r from-transparent via-accent to-transparent ${
+          send.isPending ? 'stream-glow' : 'opacity-25'
+        }`}
+      />
+
+      <header className="flex items-center gap-3 px-4 py-3.5">
+        <span
+          aria-hidden="true"
+          className="grid size-9 shrink-0 place-items-center rounded-xl bg-accent/15 text-accent ring-1 ring-accent/25"
         >
-          ✕
-        </button>
+          <Sparkles size={17} strokeWidth={2} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="truncate text-sm font-semibold tracking-tight">Assistant</h2>
+          <p className="truncate text-xs text-ink-muted">
+            {send.isPending ? 'Working on it…' : 'Proposes changes; you confirm them.'}
+          </p>
+        </div>
+        {turns.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setTurns([])}
+            title="Clear the conversation"
+            className="grid size-8 cursor-pointer place-items-center rounded-lg text-ink-faint transition hover:bg-surface-muted hover:text-ink"
+          >
+            <Trash2 size={15} aria-hidden="true" />
+            <span className="sr-only">Clear the conversation</span>
+          </button>
+        )}
+        {onClose && (
+          <button
+            type="button"
+            onClick={onClose}
+            className="grid size-8 cursor-pointer place-items-center rounded-lg text-ink-faint transition hover:bg-surface-muted hover:text-ink"
+          >
+            <X size={16} aria-hidden="true" />
+            <span className="sr-only">Close assistant</span>
+          </button>
+        )}
       </header>
+
+      <div className="mx-4 h-px bg-border-subtle/60" />
 
       <div
         ref={scrollRef}
         onScroll={(e) => {
           const box = e.currentTarget
-          stickRef.current =
-            box.scrollHeight - box.scrollTop - box.clientHeight < STICK_WITHIN
+          const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < STICK_WITHIN
+          stickRef.current = atBottom
+          setPinned(atBottom)
         }}
-        className="flex-1 space-y-3 overflow-y-auto px-4 py-4"
+        className="flex-1 space-y-4 overflow-y-auto px-4 py-4"
       >
-        {turns.length === 0 && (
-          <div className="rounded-lg bg-surface-muted p-3 text-sm text-ink-muted">
-            <p>Try:</p>
-            <ul className="mt-1.5 space-y-1">
-              <li>“How is my search actually going?”</li>
-              <li>“What should I learn next?”</li>
-              <li>“Track the backend role at Zerodha, I applied 3 days ago”</li>
-              <li>“Draft a follow-up for Amazon”</li>
-              <li>“Compare Amazon and Razorpay”</li>
-              <li>“Mark Amazon as rejected”</li>
+        {turns.length === 0 && !send.isPending && (
+          <div className="rise pt-6">
+            <p className="font-display text-lg leading-snug font-semibold tracking-tight text-balance">
+              Ask about the search, or just say what happened.
+            </p>
+            <p className="mt-1.5 text-sm text-ink-muted">
+              It reads your applications and your resume. Anything it wants to change comes back as
+              a card you approve first.
+            </p>
+            <ul className="mt-4 space-y-2">
+              {OPENERS.map((opener) => (
+                <li key={opener}>
+                  <button
+                    type="button"
+                    onClick={() => submit(opener)}
+                    className="glass group flex w-full cursor-pointer items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm text-ink-muted transition hover:text-ink"
+                  >
+                    <Sparkles
+                      size={14}
+                      aria-hidden="true"
+                      className="shrink-0 text-accent/60 transition group-hover:text-accent"
+                    />
+                    <span className="min-w-0 flex-1">{opener}</span>
+                  </button>
+                </li>
+              ))}
             </ul>
+            <p className="mt-4 text-xs text-ink-faint">
+              To track a whole posting, use <span className="text-ink-muted">Paste a job</span> —
+              it keeps the description intact.
+            </p>
           </div>
         )}
 
         {turns.map((turn, index) => (
-          <div key={index} className={turn.role === 'you' ? 'text-right' : ''}>
-            {/* Only the assistant's prose is markdown. What you typed is shown
-                as you typed it — asterisks in a pasted title are punctuation,
-                not formatting — and an error message is not the model's to
-                format at all. */}
-            <div
-              className={`inline-block max-w-[85%] rounded-lg px-3 py-2 text-left text-sm ${
-                turn.role === 'you'
-                  ? 'bg-accent whitespace-pre-wrap text-white'
-                  : turn.isError
-                    ? 'bg-rose-50 whitespace-pre-wrap text-rose-700'
-                    : 'bg-surface-muted'
-              }`}
-            >
-              {turn.role === 'you' || turn.isError ? turn.text : <Markdown>{turn.text}</Markdown>}
-            </div>
-
-            {/* Documents come from the database, not from the model's output.
-                Asked to relay a job description the model rewrote it — 3,400
-                characters in, 1,900 out — and sometimes said "here's the JD"
-                and reproduced none of it. Rendering the stored text directly is
-                the only way it arrives whole. Open by default: asking for the
-                JD means wanting to read it, not to click once more. */}
-            {turn.attachments?.map((attachment) => (
-              <details
-                key={attachment.title}
-                open
-                className="mt-2 rounded-lg border border-border-subtle bg-surface-muted text-left"
-              >
-                <summary className="cursor-pointer px-3 py-2 text-xs font-medium">
-                  {attachment.title}
-                </summary>
-                <pre className="max-h-96 overflow-auto whitespace-pre-wrap wrap-break-word border-t border-border-subtle px-3 py-2 font-sans text-xs leading-relaxed">
-                  {attachment.body}
-                </pre>
-              </details>
-            ))}
-
-            {/* Which tools ran, so an answer can be traced to its source rather
-                than taken on trust. Quiet enough to ignore when you don't care. */}
-            {turn.tools?.length > 0 && (
-              <p className="mt-1 text-[11px] text-ink-muted">
-                looked up: {[...new Set(turn.tools)].join(', ')}
-              </p>
-            )}
-
-            {turn.action && (
+          <div key={index} className={turn.role === 'you' ? 'flex justify-end' : ''}>
+            <div className={turn.role === 'you' ? 'max-w-[88%]' : 'w-full'}>
+              {/* Only the assistant's prose is markdown. What you typed is shown
+                  as you typed it — asterisks in a pasted title are punctuation,
+                  not formatting — and an error message is not the model's to
+                  format at all. */}
               <div
-                className={`mt-2 rounded-lg border p-3 text-left ${
-                  turn.action.destructive
-                    ? 'border-rose-300 bg-rose-50'
-                    : 'border-amber-300 bg-amber-50'
+                className={`text-sm leading-relaxed ${
+                  turn.role === 'you'
+                    ? 'rounded-2xl rounded-br-md bg-accent px-3.5 py-2.5 font-medium whitespace-pre-wrap text-accent-ink'
+                    : turn.isError
+                      ? 'flex gap-2.5 rounded-2xl border border-danger/30 bg-danger/10 px-3.5 py-2.5 whitespace-pre-wrap text-danger'
+                      : 'glass rounded-2xl rounded-bl-md px-3.5 py-2.5'
                 }`}
               >
-                {/* Destructive actions read differently on purpose. Everything
-                    else the assistant does is undone by appending a correcting
-                    event; a deletion is not, and a card that looks identical
-                    trains you to click through it at the same speed. */}
-                <p
-                  className={`text-xs font-medium ${
-                    turn.action.destructive ? 'text-rose-900' : 'text-amber-900'
-                  }`}
-                >
-                  {turn.action.destructive ? 'This cannot be undone' : 'Confirm this change'}
-                </p>
-                <p className="mt-1 text-sm font-medium">{turn.action.summary}</p>
-
-                <ul className="mt-1.5 space-y-0.5">
-                  {turn.action.details.map((line) => (
-                    <li
-                      key={line}
-                      className={`text-xs ${
-                        turn.action.destructive ? 'text-rose-900' : 'text-amber-900'
-                      }`}
-                    >
-                      {line}
-                    </li>
-                  ))}
-                </ul>
-
-                {/* Only for actions aimed at an existing row. A creation has
-                    nothing to have resolved, and showing "100% confidence"
-                    there would imply a check that never happened. */}
-                {turn.action.confidence != null && (
-                  <p
-                    className={`mt-1.5 text-xs ${
-                      turn.action.destructive ? 'text-rose-800' : 'text-amber-800'
-                    }`}
-                  >
-                    Matched on {turn.action.matched_on} ·{' '}
-                    {Math.round(turn.action.confidence * 100)}% confidence
-                  </p>
+                {turn.isError && (
+                  <TriangleAlert size={16} aria-hidden="true" className="mt-0.5 shrink-0" />
                 )}
-
-                <div className="mt-2 flex gap-2">
-                  <button
-                    type="button"
-                    disabled={confirm.isPending}
-                    onClick={() => confirm.mutate(turn.action)}
-                    className={`rounded-lg px-3 py-1.5 text-xs font-medium text-white transition disabled:opacity-60 ${
-                      turn.action.destructive
-                        ? 'bg-rose-600 hover:bg-rose-700'
-                        : 'bg-accent hover:bg-accent-hover'
-                    }`}
-                  >
-                    {confirm.isPending
-                      ? 'Applying…'
-                      : turn.action.destructive
-                        ? 'Delete permanently'
-                        : 'Confirm'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setTurns((t) =>
-                        t.map((x) => (x === turn ? { ...x, action: null } : x)),
-                      )
-                    }
-                    className="rounded-lg border border-border-subtle bg-surface px-3 py-1.5 text-xs transition hover:bg-surface-muted"
-                  >
-                    Cancel
-                  </button>
-                </div>
+                {turn.role === 'you' || turn.isError ? (
+                  <span>{turn.text}</span>
+                ) : (
+                  <Markdown>{turn.text}</Markdown>
+                )}
               </div>
-            )}
+
+              {/* Documents come from the database, not from the model's output.
+                  Asked to relay a job description the model rewrote it — 3,400
+                  characters in, 1,900 out — and sometimes said "here's the JD"
+                  and reproduced none of it. Rendering the stored text directly is
+                  the only way it arrives whole. Open by default: asking for the
+                  JD means wanting to read it, not to click once more. */}
+              {turn.attachments?.map((attachment) => (
+                <details
+                  key={attachment.title}
+                  open
+                  className="glass group mt-2 overflow-hidden rounded-xl"
+                >
+                  <summary className="flex cursor-pointer list-none items-center gap-2 px-3 py-2 text-xs font-medium text-ink-muted transition hover:text-ink">
+                    <FileText size={14} aria-hidden="true" className="shrink-0 text-accent/70" />
+                    <span className="min-w-0 flex-1 truncate">{attachment.title}</span>
+                    <ChevronDown
+                      size={14}
+                      aria-hidden="true"
+                      className="shrink-0 transition group-open:rotate-180"
+                    />
+                  </summary>
+                  <pre className="max-h-96 overflow-auto border-t border-border-subtle/60 px-3 py-2.5 font-sans text-xs leading-relaxed whitespace-pre-wrap wrap-break-word text-ink-muted">
+                    {attachment.body}
+                  </pre>
+                </details>
+              ))}
+
+              {/* Which tools ran, so an answer can be traced to its source rather
+                  than taken on trust. Quiet enough to ignore when you don't care. */}
+              {turn.tools?.length > 0 && <ToolTrail tools={turn.tools} verb="looked up" />}
+
+              {turn.action && (
+                <ConfirmCard
+                  action={turn.action}
+                  pending={confirm.isPending}
+                  onConfirm={() => confirm.mutate(turn.action)}
+                  onCancel={() =>
+                    setTurns((t) => t.map((x) => (x === turn ? { ...x, action: null } : x)))
+                  }
+                />
+              )}
+            </div>
           </div>
         ))}
 
@@ -429,33 +448,56 @@ export function AgentChat({ open, onClose }) {
             drained by then the swap is invisible. */}
         {send.isPending && (
           <div>
-            <div className="inline-block max-w-[85%] rounded-lg bg-surface-muted px-3 py-2 text-sm">
-              {liveText ? <Markdown>{liveText}</Markdown> : <span className="text-ink-muted">Thinking…</span>}
+            <div className="glass rounded-2xl rounded-bl-md px-3.5 py-2.5 text-sm leading-relaxed">
+              {liveText ? (
+                <Markdown>{liveText}</Markdown>
+              ) : (
+                <span className="flex items-center gap-1.5 text-ink-muted">
+                  Thinking
+                  <Dots />
+                </span>
+              )}
               {/* Sits under the text rather than after it: mid-stream the last
                   block is a paragraph or a list item, and a caret spliced into
                   the flow jumps around as the markdown re-parses each frame. */}
-              <span className="mt-1 block h-0.5 w-4 animate-pulse rounded-full bg-ink-muted" />
+              {liveText && (
+                <span className="stream-glow mt-1.5 block h-0.5 w-5 rounded-full bg-accent" />
+              )}
             </div>
 
             {/* Named as they run, not listed at the end: this is what accounts
                 for the wait while the loop is several rounds deep. */}
-            {liveTools.length > 0 && (
-              <p className="mt-1 text-[11px] text-ink-muted">
-                looking up: {[...new Set(liveTools)].join(', ')}
-              </p>
-            )}
+            {liveTools.length > 0 && <ToolTrail tools={liveTools} verb="looking up" live />}
           </div>
         )}
       </div>
 
+      {/* Only when you have actually scrolled away from it. Otherwise this is a
+          button that always says "go where you already are". */}
+      {!pinned && (turns.length > 0 || send.isPending) && (
+        <button
+          type="button"
+          onClick={() => {
+            stickRef.current = true
+            setPinned(true)
+            const box = scrollRef.current
+            if (box) box.scrollTop = box.scrollHeight
+          }}
+          className="glass absolute bottom-24 left-1/2 flex -translate-x-1/2 cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5 text-xs text-ink-muted transition hover:text-ink"
+        >
+          <ChevronDown size={13} aria-hidden="true" />
+          Latest
+        </button>
+      )}
+
       <form
-        className="border-t border-border-subtle p-3"
+        className="p-3"
         onSubmit={(e) => {
           e.preventDefault()
           submit()
         }}
       >
-        <div className="flex items-end gap-2">
+        <div className="well flex items-end gap-2 rounded-2xl p-2 transition focus-within:border-accent/40 focus-within:shadow-[0_0_0_3px] focus-within:shadow-accent/12">
           {/* A textarea, not an input: what gets pasted here is a chunk of a
               job posting, and a single line shows you the last few words of it
               with no way to check what you actually pasted. Grows to a few
@@ -475,16 +517,18 @@ export function AgentChat({ open, onClose }) {
             }}
             rows={1}
             maxLength={MAX_MESSAGE_CHARS}
-            placeholder="Ask, or say what happened…  (Shift+Enter for a new line)"
+            placeholder="Ask, or say what happened…"
             aria-label="Message the assistant"
-            className="min-w-0 flex-1 resize-none overflow-y-auto rounded-lg border border-border-subtle px-3 py-2 text-sm leading-relaxed outline-none focus:border-accent focus:ring-2 focus:ring-accent/20"
+            className="min-w-0 flex-1 resize-none self-center overflow-y-auto bg-transparent px-2 py-1.5 text-sm leading-relaxed outline-none placeholder:text-ink-faint focus-visible:outline-none"
           />
           <button
             type="submit"
             disabled={send.isPending || !draft.trim()}
-            className="shrink-0 rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-60"
+            title="Send  ·  Shift+Enter for a new line"
+            className="grid size-9 shrink-0 cursor-pointer place-items-center rounded-xl bg-accent text-accent-ink transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-surface-muted disabled:text-ink-faint"
           >
-            Send
+            <ArrowUp size={17} strokeWidth={2.5} aria-hidden="true" />
+            <span className="sr-only">Send message</span>
           </button>
         </div>
 
@@ -492,12 +536,128 @@ export function AgentChat({ open, onClose }) {
             first keystroke reads as a constraint on ordinary questions, which
             this is not — it is a guard against pasting an entire document. */}
         {draft.length > MAX_MESSAGE_CHARS * 0.8 && (
-          <p className="mt-1 text-right text-xs text-ink-muted">
+          <p className="mt-1.5 px-1 text-right font-mono text-xs text-ink-faint tabular-nums">
             {draft.length.toLocaleString()} / {MAX_MESSAGE_CHARS.toLocaleString()}
             {draft.length >= MAX_MESSAGE_CHARS && ' — to track a whole posting, paste it instead'}
           </p>
         )}
       </form>
-    </aside>
+    </section>
+  )
+}
+
+function ToolTrail({ tools, verb, live = false }) {
+  return (
+    <p className="mt-1.5 flex flex-wrap items-center gap-1.5 px-1 text-[11px] text-ink-faint">
+      <Search
+        size={11}
+        aria-hidden="true"
+        className={`shrink-0 ${live ? 'stream-glow text-accent' : ''}`}
+      />
+      <span>{verb}:</span>
+      {[...new Set(tools)].map((tool) => (
+        <span
+          key={tool}
+          className="rounded-md bg-surface-muted/70 px-1.5 py-0.5 font-mono text-[10px] text-ink-muted"
+        >
+          {tool}
+        </span>
+      ))}
+    </p>
+  )
+}
+
+function Dots() {
+  return (
+    <span aria-hidden="true" className="flex gap-1">
+      {[0, 1, 2].map((i) => (
+        <span
+          key={i}
+          className="stream-glow size-1 rounded-full bg-ink-muted"
+          style={{ animationDelay: `${i * 0.2}s` }}
+        />
+      ))}
+    </span>
+  )
+}
+
+/**
+ * The change the assistant wants to make, before it is made.
+ *
+ * Destructive actions read differently on purpose. Everything else the
+ * assistant does is undone by appending a correcting event; a deletion is not,
+ * and a card that looks identical trains you to click through it at the same
+ * speed.
+ */
+function ConfirmCard({ action, pending, onConfirm, onCancel }) {
+  const destructive = action.destructive
+  const Icon = destructive ? ShieldAlert : Check
+
+  return (
+    <div
+      className={`mt-2.5 overflow-hidden rounded-xl border ${
+        destructive ? 'border-danger/40 bg-danger/8' : 'border-signal/35 bg-signal/8'
+      }`}
+    >
+      <div
+        className={`flex items-center gap-2 px-3.5 py-2 text-xs font-semibold tracking-wide ${
+          destructive
+            ? 'border-b border-danger/25 bg-danger/10 text-danger'
+            : 'border-b border-signal/25 bg-signal/10 text-signal'
+        }`}
+      >
+        <Icon size={14} aria-hidden="true" className="shrink-0" />
+        {destructive ? 'This cannot be undone' : 'Confirm this change'}
+      </div>
+
+      <div className="px-3.5 py-3">
+        <p className="text-sm font-medium">{action.summary}</p>
+
+        <ul className="mt-2 space-y-1">
+          {action.details.map((line) => (
+            <li key={line} className="flex gap-2 text-xs text-ink-muted">
+              <span
+                aria-hidden="true"
+                className={`mt-1.5 size-1 shrink-0 rounded-full ${
+                  destructive ? 'bg-danger/60' : 'bg-signal/60'
+                }`}
+              />
+              <span className="min-w-0">{line}</span>
+            </li>
+          ))}
+        </ul>
+
+        {/* Only for actions aimed at an existing row. A creation has nothing to
+            have resolved, and showing "100% confidence" there would imply a
+            check that never happened. */}
+        {action.confidence != null && (
+          <p className="mt-2.5 font-mono text-[11px] text-ink-faint tabular-nums">
+            matched on {action.matched_on} · {Math.round(action.confidence * 100)}% confidence
+          </p>
+        )}
+
+        <div className="mt-3 flex gap-2">
+          <button
+            type="button"
+            disabled={pending}
+            onClick={onConfirm}
+            className={`cursor-pointer rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+              destructive
+                ? 'bg-danger text-canvas hover:brightness-110'
+                : 'bg-accent text-accent-ink hover:bg-accent-hover'
+            }`}
+          >
+            {pending ? 'Applying…' : destructive ? 'Delete permanently' : 'Confirm'}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="cursor-pointer rounded-lg border border-border-subtle px-3 py-1.5 text-xs font-medium text-ink-muted transition hover:bg-surface-muted hover:text-ink"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

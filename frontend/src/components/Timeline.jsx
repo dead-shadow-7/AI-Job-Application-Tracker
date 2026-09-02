@@ -43,21 +43,26 @@ export function Timeline({ events = [] }) {
             {!last && (
               <span
                 aria-hidden="true"
-                className="absolute left-[4.25rem] top-2 h-full w-px bg-border-subtle"
+                className="absolute top-2 left-[4.25rem] h-full w-px bg-border-subtle/70"
               />
             )}
 
             <time
               dateTime={event.occurred_at}
-              className="w-16 shrink-0 pt-px text-right text-xs tabular-nums text-ink-muted"
+              className="w-16 shrink-0 pt-px text-right text-xs text-ink-faint tabular-nums"
             >
               {formatDayMonth(event.occurred_at)}
             </time>
 
             <span
               aria-hidden="true"
-              className={`relative z-10 mt-1 size-2.5 shrink-0 rounded-full ring-4 ring-surface ${
-                advancing ? 'bg-accent' : 'border border-ink-muted bg-surface'
+              /* Ringed in the canvas colour so the marker punches a hole in
+                 the connector behind it rather than sitting on top of a line
+                 that runs straight through it. */
+              className={`relative z-10 mt-1 size-2.5 shrink-0 rounded-full ring-4 ring-canvas ${
+                advancing
+                  ? 'bg-accent shadow-[0_0_10px] shadow-accent/50'
+                  : 'border border-ink-faint bg-canvas'
               }`}
             />
 
@@ -65,13 +70,13 @@ export function Timeline({ events = [] }) {
               <p className="text-sm font-medium">
                 {EVENT_LABELS[event.event_type] ?? event.event_type}
                 {event.source === 'agent' && (
-                  <span className="ml-2 rounded bg-violet-50 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 ring-1 ring-inset ring-violet-200">
+                  <span className="ml-2 rounded bg-accent/14 px-1.5 py-0.5 text-[10px] font-medium text-accent ring-1 ring-accent/30 ring-inset">
                     agent
                   </span>
                 )}
               </p>
               {event.note && <p className="mt-0.5 text-sm text-ink-muted">{event.note}</p>}
-              <p className="mt-0.5 text-xs text-ink-muted">{relativeDays(event.occurred_at)}</p>
+              <p className="mt-0.5 text-xs text-ink-faint">{relativeDays(event.occurred_at)}</p>
             </div>
           </li>
         )

@@ -1,9 +1,10 @@
+import { ArrowLeft, Check, CopyCheck, TriangleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { formatSalary } from '@/lib/format'
 
 const FIELD =
-  'w-full rounded-lg border border-border-subtle px-3 py-2 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20'
+  'well w-full rounded-xl px-3 py-2.5 text-sm outline-none transition placeholder:text-ink-faint focus:border-accent/40 focus:shadow-[0_0_0_3px] focus:shadow-accent/12 focus-visible:outline-none'
 
 /**
  * Review before save.
@@ -31,15 +32,23 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
   const salaryPreview = formatSalary(job)
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-3xl space-y-5">
       <div>
-        <button type="button" onClick={onBack} className="text-sm text-ink-muted hover:text-accent">
-          ← Paste a different posting
+        <button
+          type="button"
+          onClick={onBack}
+          className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-ink-faint transition hover:text-accent"
+        >
+          <ArrowLeft size={13} aria-hidden="true" />
+          Paste a different posting
         </button>
-        <h1 className="mt-2 text-lg font-semibold tracking-tight">Review before saving</h1>
-        <p className="mt-0.5 text-sm text-ink-muted">
-          Extracted by {preview.model} in {(preview.latency_ms / 1000).toFixed(1)}s using{' '}
-          {preview.tokens_used.toLocaleString()} tokens. Nothing has been saved yet.
+        <h1 className="mt-2 font-display text-2xl leading-tight font-semibold tracking-tight">
+          Review before saving
+        </h1>
+        <p className="mt-1 text-sm text-ink-muted">
+          Extracted by <span className="font-mono text-xs">{preview.model}</span> in{' '}
+          {(preview.latency_ms / 1000).toFixed(1)}s using {preview.tokens_used.toLocaleString()}{' '}
+          tokens. Nothing has been saved yet.
         </p>
       </div>
 
@@ -48,14 +57,15 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
           two genuinely separate openings at one company would trip it. Saving
           stays enabled either way — this warns, it does not block. */}
       {preview.duplicate_of && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-          <p className="text-sm text-amber-900">
+        <div className="flex gap-3 rounded-2xl border border-signal/30 bg-signal/8 px-4 py-3.5">
+          <CopyCheck size={17} aria-hidden="true" className="mt-0.5 shrink-0 text-signal" />
+          <p className="text-sm text-signal">
             {preview.duplicate_of.is_exact
               ? 'You already track this exact posting: '
               : 'This looks like a posting you already track: '}
             <Link
               to={`/applications/${preview.duplicate_of.application_id}`}
-              className="font-medium underline"
+              className="font-semibold underline underline-offset-2"
             >
               {preview.duplicate_of.label}
             </Link>
@@ -67,24 +77,30 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
       )}
 
       {preview.warnings.length > 0 && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4">
-          <h2 className="text-sm font-medium text-amber-900">
-            {preview.warnings.length === 1 ? 'One thing to check' : `${preview.warnings.length} things to check`}
+        <div className="rounded-2xl border border-signal/30 bg-signal/8 p-4">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-signal">
+            <TriangleAlert size={15} aria-hidden="true" className="shrink-0" />
+            {preview.warnings.length === 1
+              ? 'One thing to check'
+              : `${preview.warnings.length} things to check`}
           </h2>
-          <ul className="mt-2 space-y-1 text-sm text-amber-800">
+          <ul className="mt-2.5 space-y-1.5 text-sm text-signal/85">
             {preview.warnings.map((warning) => (
-              <li key={warning} className="flex gap-2">
-                <span aria-hidden="true">·</span>
-                {warning}
+              <li key={warning} className="flex gap-2.5">
+                <span
+                  aria-hidden="true"
+                  className="mt-2 size-1 shrink-0 rounded-full bg-signal/60"
+                />
+                <span className="min-w-0">{warning}</span>
               </li>
             ))}
           </ul>
         </div>
       )}
 
-      <div className="space-y-4 rounded-xl border border-border-subtle bg-surface p-5">
+      <div className="glass space-y-4 rounded-2xl p-5">
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium">The role</h2>
+          <h2 className="text-sm font-semibold">The role</h2>
           <ConfidenceBadge value={Number(preview.confidence)} />
         </div>
 
@@ -99,7 +115,7 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
               value={job.company_name ?? ''}
               onChange={set('company_name')}
               placeholder="Not named in the posting — add it"
-              className={`${FIELD} ${!job.company_name ? 'border-amber-400 bg-amber-50/40' : ''}`}
+              className={`${FIELD} ${!job.company_name ? 'border-signal/50 bg-signal/8' : ''}`}
             />
           </Field>
           <Field label="Role" required missing={!job.title}>
@@ -108,7 +124,7 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
               value={job.title ?? ''}
               onChange={set('title')}
               placeholder="Not found — add it"
-              className={`${FIELD} ${!job.title ? 'border-amber-400 bg-amber-50/40' : ''}`}
+              className={`${FIELD} ${!job.title ? 'border-signal/50 bg-signal/8' : ''}`}
             />
           </Field>
         </div>
@@ -136,18 +152,16 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
         </div>
       </div>
 
-      <div
-        className={`space-y-4 rounded-xl border bg-surface p-5 ${
-          salaryDropped ? 'border-amber-300' : 'border-border-subtle'
-        }`}
-      >
+      <div className={`glass space-y-4 rounded-2xl p-5 ${salaryDropped ? 'border-signal/40' : ''}`}>
         <div className="flex items-center justify-between">
-          <h2 className="text-sm font-medium">Compensation</h2>
-          {salaryPreview && <span className="text-sm tabular-nums text-ink-muted">{salaryPreview}</span>}
+          <h2 className="text-sm font-semibold">Compensation</h2>
+          {salaryPreview && (
+            <span className="text-sm text-ink-muted tabular-nums">{salaryPreview}</span>
+          )}
         </div>
 
         {salaryDropped && (
-          <p className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
+          <p className="rounded-xl border border-signal/25 bg-signal/8 px-3 py-2.5 text-xs text-signal">
             A salary was returned but could not be found in the posting, so it was discarded
             rather than saved. If the posting does state one, enter it here.
           </p>
@@ -177,10 +191,10 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
         </div>
       </div>
 
-      <div className="space-y-4 rounded-xl border border-border-subtle bg-surface p-5">
-        <h2 className="text-sm font-medium">
+      <div className="glass space-y-4 rounded-2xl p-5">
+        <h2 className="text-sm font-semibold">
           Requirements
-          <span className="ml-2 font-normal text-ink-muted">
+          <span className="ml-2 font-mono text-xs font-normal text-ink-faint">
             {job.requirements.filter((r) => r.kind === 'must').length} must,{' '}
             {job.requirements.filter((r) => r.kind === 'nice').length} nice
           </span>
@@ -189,10 +203,10 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
           {job.requirements.map((req, index) => (
             <li key={`${req.kind}-${index}`} className="flex items-start gap-2">
               <span
-                className={`mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium ${
+                className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium ${
                   req.kind === 'must'
-                    ? 'bg-slate-100 text-slate-700'
-                    : 'bg-surface-muted text-ink-muted'
+                    ? 'bg-accent/14 text-accent ring-1 ring-accent/25 ring-inset'
+                    : 'bg-surface-muted/70 text-ink-faint'
                 }`}
               >
                 {req.kind}
@@ -201,26 +215,29 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
             </li>
           ))}
           {job.requirements.length === 0 && (
-            <li className="text-ink-muted">None found in the posting.</li>
+            <li className="text-ink-faint">None found in the posting.</li>
           )}
         </ul>
 
         <div>
-          <h3 className="text-xs font-medium text-ink-muted">
+          <h3 className="text-[10px] font-semibold tracking-[0.12em] text-ink-faint uppercase">
             Skills matched to the taxonomy ({job.skill_slugs.length})
           </h3>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {job.skill_slugs.map((slug) => (
-              <span key={slug} className="rounded-full bg-surface-muted px-2.5 py-1 text-xs">
+              <span
+                key={slug}
+                className="rounded-full bg-surface-muted/70 px-2.5 py-1 text-xs text-ink-muted ring-1 ring-border-subtle/60 ring-inset"
+              >
                 {slug}
               </span>
             ))}
-            {job.skill_slugs.length === 0 && <span className="text-sm text-ink-muted">None.</span>}
+            {job.skill_slugs.length === 0 && <span className="text-sm text-ink-faint">None.</span>}
           </div>
         </div>
 
         {preview.unmatched_skills.length > 0 && (
-          <p className="text-xs text-ink-muted">
+          <p className="text-xs text-ink-faint">
             Not in the taxonomy, so not attached:{' '}
             <span className="font-medium">{preview.unmatched_skills.join(', ')}</span>. New skills
             are added deliberately rather than automatically, so a typo cannot fragment scoring
@@ -229,8 +246,8 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
         )}
       </div>
 
-      <div className="space-y-4 rounded-xl border border-border-subtle bg-surface p-5">
-        <h2 className="text-sm font-medium">Status</h2>
+      <div className="glass space-y-4 rounded-2xl p-5">
+        <h2 className="text-sm font-semibold">Status</h2>
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Starting point">
             <select value={initialEvent} onChange={(e) => setInitialEvent(e.target.value)} className={FIELD}>
@@ -254,7 +271,10 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
       </div>
 
       {error && (
-        <p className="rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700" role="alert">
+        <p
+          className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger"
+          role="alert"
+        >
           {error.message}
         </p>
       )}
@@ -263,7 +283,7 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
         <button
           type="button"
           onClick={onBack}
-          className="rounded-lg border border-border-subtle px-4 py-2 text-sm font-medium transition hover:bg-surface-muted"
+          className="cursor-pointer rounded-xl border border-border-subtle px-4 py-2.5 text-sm font-medium text-ink-muted transition hover:border-border-strong hover:text-ink"
         >
           Discard
         </button>
@@ -286,8 +306,9 @@ export function ReviewExtraction({ preview, onBack, onSave, saving, error }) {
               occurredAt: toIso(occurredOn),
             })
           }
-          className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-60"
+          className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-accent-ink transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
+          <Check size={16} aria-hidden="true" />
           {saving ? 'Saving…' : 'Save application'}
         </button>
       </div>
@@ -299,10 +320,10 @@ function ConfidenceBadge({ value }) {
   const high = value >= 0.75
   return (
     <span
-      className={`rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
+      className={`rounded-full px-2 py-0.5 font-mono text-xs font-medium ring-1 ring-inset tabular-nums ${
         high
-          ? 'bg-emerald-50 text-emerald-700 ring-emerald-200'
-          : 'bg-amber-50 text-amber-800 ring-amber-200'
+          ? 'bg-accent/14 text-accent ring-accent/30'
+          : 'bg-signal/14 text-signal ring-signal/30'
       }`}
       title="The model's own estimate of how complete and unambiguous the posting was"
     >
@@ -313,14 +334,20 @@ function ConfidenceBadge({ value }) {
 
 function Field({ label, hint, children, required, missing }) {
   return (
-    <label className="block space-y-1.5">
+    <label className="block space-y-2">
       <span className="block text-sm font-medium">
         {label}
-        {required && <span className="ml-1 text-rose-600" aria-label="required">*</span>}
-        {missing && <span className="ml-2 text-xs font-normal text-amber-700">needs your input</span>}
+        {required && (
+          <span className="ml-1 text-danger" aria-label="required">
+            *
+          </span>
+        )}
+        {missing && (
+          <span className="ml-2 text-xs font-normal text-signal">needs your input</span>
+        )}
       </span>
       {children}
-      {hint && <span className="block text-xs text-ink-muted">{hint}</span>}
+      {hint && <span className="block text-xs text-ink-faint">{hint}</span>}
     </label>
   )
 }

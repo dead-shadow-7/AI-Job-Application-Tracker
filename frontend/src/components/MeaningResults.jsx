@@ -33,9 +33,11 @@ export function MeaningResults({ query }) {
 
   if (hits.length === 0) {
     return (
-      <div className="rounded-xl border border-dashed border-border-subtle bg-surface p-10 text-center">
-        <p className="text-sm font-medium">Nothing you track resembles “{query}”</p>
-        <p className="mt-1 text-sm text-ink-muted">
+      <div className="glass rounded-2xl border-dashed p-12 text-center">
+        <p className="font-display text-base font-semibold">
+          Nothing you track resembles “{query}”
+        </p>
+        <p className="mx-auto mt-1.5 max-w-md text-sm text-ink-muted">
           This searches the job descriptions by meaning, so it only covers jobs added by pasting
           a description — one entered by hand has no text to match against.
         </p>
@@ -45,28 +47,28 @@ export function MeaningResults({ query }) {
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-ink-muted">
+      <p className="px-1 text-xs text-ink-faint">
         {hits.length} {hits.length === 1 ? 'match' : 'matches'}, closest first.
       </p>
 
-      <ul className="divide-y divide-border-subtle overflow-hidden rounded-xl border border-border-subtle bg-surface">
+      <ul className="glass divide-y divide-border-subtle/50 overflow-hidden rounded-2xl">
         {hits.map((hit) => {
           const salary = formatSalary(hit.job)
 
           return (
             <li
               key={hit.application_id}
-              className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 transition hover:bg-surface-muted"
+              className="group flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3.5 transition hover:bg-white/4"
             >
               <div className="min-w-0 flex-1">
                 <Link
                   to={`/applications/${hit.application_id}`}
-                  className="text-sm font-medium hover:text-accent"
+                  className="text-sm font-medium transition group-hover:text-accent"
                 >
                   {hit.job.title}
                 </Link>
                 <span className="ml-2 text-sm text-ink-muted">{hit.job.company.name}</span>
-                <p className="mt-0.5 text-xs text-ink-muted">
+                <p className="mt-0.5 text-xs text-ink-faint">
                   {[
                     hit.job.location,
                     hit.job.work_mode && WORK_MODE_LABELS[hit.job.work_mode],
@@ -80,10 +82,10 @@ export function MeaningResults({ query }) {
               <StatusBadge status={hit.current_status} />
 
               <div className="w-24 shrink-0" title={`Cosine similarity ${hit.similarity}`}>
-                <div className="flex items-baseline justify-end gap-1 text-xs tabular-nums text-ink-muted">
+                <div className="flex items-baseline justify-end text-xs text-ink-muted tabular-nums">
                   {Math.round(hit.similarity * 100)}%
                 </div>
-                <div className="mt-1 h-1 rounded-full bg-surface-muted">
+                <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-canvas/60">
                   <div
                     className="h-1 rounded-full bg-accent"
                     style={{ width: `${Math.max(4, hit.similarity * 100)}%` }}

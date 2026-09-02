@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { ChevronRight, CircleAlert } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '@/lib/api'
@@ -48,29 +49,32 @@ export function NeedsAttention() {
   }
 
   return (
-    <section className="rounded-xl border border-amber-200 bg-amber-50/60 p-5">
+    <section className="glass rounded-2xl border-signal/25 bg-signal/6 p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-sm font-medium text-amber-900">
+        <h2 className="text-sm font-semibold text-signal">
           <button
             type="button"
             onClick={toggle}
             aria-expanded={open}
             aria-controls="needs-attention-list"
-            className="flex items-center gap-2 text-left transition hover:text-amber-950"
+            className="flex cursor-pointer items-center gap-2 text-left transition hover:brightness-110"
           >
-            <span aria-hidden="true" className="text-xs text-amber-700">
-              {open ? '▾' : '▸'}
-            </span>
+            <CircleAlert size={16} aria-hidden="true" className="shrink-0" />
             {items.length === 1
               ? 'One application needs attention'
               : `${items.length} applications need attention`}
             {/* The unanswered count is already on the button beside it, so the
                 fold hides only the follow-ups — say how many. */}
             {!open && items.length > ghostable.length && (
-              <span className="font-normal text-amber-700">
+              <span className="font-normal opacity-80">
                 · {items.length - ghostable.length} to follow up
               </span>
             )}
+            <ChevronRight
+              size={14}
+              aria-hidden="true"
+              className={`shrink-0 transition-transform ${open ? 'rotate-90' : ''}`}
+            />
           </button>
         </h2>
         {ghostable.length > 0 && (
@@ -87,7 +91,7 @@ export function NeedsAttention() {
               }
             }}
             disabled={closeGhosted.isPending}
-            className="rounded-lg border border-amber-300 bg-surface px-3 py-1.5 text-xs font-medium text-amber-900 transition hover:bg-amber-100 disabled:opacity-60"
+            className="cursor-pointer rounded-lg border border-signal/40 px-3 py-1.5 text-xs font-medium text-signal transition hover:bg-signal/12 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {closeGhosted.isPending
               ? 'Closing…'
@@ -106,12 +110,12 @@ export function NeedsAttention() {
         {items.map((item) => (
           <li
             key={item.application_id}
-            className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-lg bg-surface px-3 py-2"
+            className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 rounded-xl bg-canvas/40 px-3 py-2.5 transition hover:bg-canvas/60"
           >
             <div className="min-w-0 flex-1">
               <Link
                 to={`/applications/${item.application_id}`}
-                className="text-sm font-medium hover:text-accent"
+                className="text-sm font-medium transition hover:text-accent"
               >
                 {item.job.company.name}
               </Link>
@@ -122,8 +126,8 @@ export function NeedsAttention() {
             <span
               className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${
                 item.rule_action === 'mark_ghosted'
-                  ? 'bg-orange-50 text-orange-800 ring-orange-200'
-                  : 'bg-amber-100 text-amber-900 ring-amber-300'
+                  ? 'bg-orange-400/12 text-orange-300 ring-orange-400/28'
+                  : 'bg-signal/14 text-signal ring-signal/35'
               }`}
               title={`Rule: ${item.rule_threshold} days in ${item.current_status}`}
             >

@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Clock, ExternalLink, Plus, Trash2 } from 'lucide-react'
+import { useNavigate, useParams } from 'react-router-dom'
 import { DetailsPanel } from '@/components/DetailsPanel'
 import { ErrorState } from '@/components/ErrorState'
 import { MatchPanel } from '@/components/MatchPanel'
+import { PageHeader } from '@/components/PageHeader'
 import { RolePanel } from '@/components/RolePanel'
 import { Spinner } from '@/components/Spinner'
 import { StatusBadge } from '@/components/StatusBadge'
@@ -27,8 +29,11 @@ const LOGGABLE = [
   'note_added',
 ]
 
+/* One field style, shared. An inset well rather than an outlined box: on the
+   dark canvas an outline reads as a card, and a card is not something you type
+   into. */
 const FIELD =
-  'w-full rounded-lg border border-border-subtle px-3 py-2 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20'
+  'well w-full rounded-xl px-3 py-2.5 text-sm outline-none transition placeholder:text-ink-faint focus:border-accent/40 focus:shadow-[0_0_0_3px] focus:shadow-accent/12 focus-visible:outline-none'
 
 export function ApplicationDetail() {
   const { id } = useParams()
@@ -66,34 +71,33 @@ export function ApplicationDetail() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link to="/" className="text-sm text-ink-muted hover:text-accent">
-          ← Applications
-        </Link>
-        <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-lg font-semibold tracking-tight">{job.title}</h1>
-            <p className="mt-0.5 text-sm text-ink-muted">
-              {job.company.name}
-              {job.location && ` · ${job.location}`}
-              {job.work_mode && ` · ${WORK_MODE_LABELS[job.work_mode]}`}
-            </p>
-          </div>
-          <div className="flex items-center gap-3">
+      <PageHeader
+        back={{ to: '/', label: 'Applications' }}
+        title={job.title}
+        subtitle={[
+          job.company.name,
+          job.location,
+          job.work_mode && WORK_MODE_LABELS[job.work_mode],
+        ]
+          .filter(Boolean)
+          .join(' · ')}
+        actions={
+          <>
             <StatusBadge status={data.current_status} />
             {job.url && (
               <a
                 href={job.url}
                 target="_blank"
                 rel="noreferrer noopener"
-                className="rounded-lg border border-border-subtle px-3 py-1.5 text-sm transition hover:bg-surface-muted"
+                className="inline-flex items-center gap-1.5 rounded-xl border border-border-subtle px-3 py-2 text-sm text-ink-muted transition hover:border-border-strong hover:text-ink"
               >
-                Posting ↗
+                Posting
+                <ExternalLink size={14} aria-hidden="true" />
               </a>
             )}
-          </div>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {/* The line the Phase 4 agent will eventually write for you. Showing it
           now proves the event log already carries what that will need. */}
@@ -103,14 +107,14 @@ export function ApplicationDetail() {
 
       <div className="grid gap-6 lg:grid-cols-[1fr_20rem]">
         <div className="space-y-6">
-          <section className="rounded-xl border border-border-subtle bg-surface p-5">
-            <h2 className="text-sm font-medium">Timeline</h2>
+          <section className="glass rounded-2xl p-5">
+            <h2 className="text-sm font-semibold">Timeline</h2>
             <div className="mt-4">
               <Timeline events={data.events} />
             </div>
 
             <form
-              className="mt-6 flex flex-wrap gap-2 border-t border-border-subtle pt-4"
+              className="mt-6 flex flex-wrap gap-2 border-t border-border-subtle/70 pt-4"
               onSubmit={(e) => {
                 e.preventDefault()
                 const form = new FormData(e.currentTarget)
@@ -141,13 +145,14 @@ export function ApplicationDetail() {
               <button
                 type="submit"
                 disabled={addEvent.isPending}
-                className="rounded-lg bg-accent px-3 py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-60"
+                className="inline-flex cursor-pointer items-center gap-1.5 rounded-xl bg-accent px-3.5 py-2 text-sm font-semibold text-accent-ink transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
               >
+                <Plus size={15} aria-hidden="true" />
                 Log
               </button>
             </form>
             {addEvent.error && (
-              <p className="mt-2 text-sm text-rose-700" role="alert">
+              <p className="mt-2 text-sm text-danger" role="alert">
                 {addEvent.error.message}
               </p>
             )}
@@ -168,8 +173,9 @@ export function ApplicationDetail() {
                 remove.mutate()
               }
             }}
-            className="w-full rounded-lg border border-rose-200 px-3 py-2 text-sm font-medium text-rose-700 transition hover:bg-rose-50"
+            className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-xl border border-danger/30 px-3 py-2.5 text-sm font-medium text-danger transition hover:bg-danger/10"
           >
+            <Trash2 size={15} aria-hidden="true" />
             Stop tracking
           </button>
         </aside>
@@ -184,14 +190,17 @@ function IdleNotice({ status, days }) {
   if (days < 7) return null
 
   return (
-    <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3">
-      <p className="text-sm text-amber-900">
-        No activity for <strong>{days} days</strong> since this moved to {STATUS_LABELS[status] ?? status}.
-        A follow-up may be due.
-      </p>
-      <p className="mt-0.5 text-xs text-amber-700">
-        Phase 4 turns this into a rule you configure, and drafts the email.
-      </p>
+    <div className="flex gap-3 rounded-2xl border border-signal/30 bg-signal/8 px-4 py-3.5">
+      <Clock size={17} aria-hidden="true" className="mt-0.5 shrink-0 text-signal" />
+      <div>
+        <p className="text-sm text-signal">
+          No activity for <strong className="font-semibold">{days} days</strong> since this moved to{' '}
+          {STATUS_LABELS[status] ?? status}. A follow-up may be due.
+        </p>
+        <p className="mt-0.5 text-xs text-signal/70">
+          Phase 4 turns this into a rule you configure, and drafts the email.
+        </p>
+      </div>
     </div>
   )
 }

@@ -1,4 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Pencil } from 'lucide-react'
 import { useState } from 'react'
 import { api } from '@/lib/api'
 import { formatDate, formatSalary, relativeDays } from '@/lib/format'
@@ -85,7 +86,7 @@ const APPLICATION_FIELDS = [
 ]
 
 const INPUT =
-  'w-full rounded-lg border border-border-subtle px-2.5 py-1.5 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20'
+  'well w-full rounded-lg px-2.5 py-2 text-sm outline-none transition placeholder:text-ink-faint focus:border-accent/40 focus:shadow-[0_0_0_3px] focus:shadow-accent/12 focus-visible:outline-none'
 
 /**
  * The details of one application, readable and editable.
@@ -136,19 +137,20 @@ export function DetailsPanel({ application }) {
 
   if (!editing) {
     return (
-      <section className="rounded-xl border border-border-subtle bg-surface p-5">
+      <section className="glass rounded-2xl p-5">
         <div className="flex items-center justify-between gap-3">
-          <h2 className="text-sm font-medium">Details</h2>
+          <h2 className="text-sm font-semibold">Details</h2>
           <button
             type="button"
             onClick={open}
-            className="rounded-lg border border-border-subtle px-2.5 py-1 text-xs transition hover:bg-surface-muted"
+            className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border-subtle px-2.5 py-1.5 text-xs text-ink-muted transition hover:border-border-strong hover:text-ink"
           >
+            <Pencil size={12} aria-hidden="true" />
             Edit
           </button>
         </div>
 
-        <dl className="mt-3 space-y-2.5 text-sm">
+        <dl className="mt-4 space-y-2.5 text-sm">
           <Row label="Applied" value={formatDate(application.applied_at)} />
           <Row label="Last activity" value={relativeDays(application.last_activity_at)} />
           <Row label="Salary" value={formatSalary(job)} />
@@ -163,7 +165,7 @@ export function DetailsPanel({ application }) {
         </dl>
 
         {application.notes && (
-          <p className="mt-3 whitespace-pre-wrap border-t border-border-subtle pt-3 text-sm text-ink-muted">
+          <p className="mt-4 border-t border-border-subtle/70 pt-3 text-sm whitespace-pre-wrap text-ink-muted">
             {application.notes}
           </p>
         )}
@@ -172,9 +174,9 @@ export function DetailsPanel({ application }) {
   }
 
   return (
-    <section className="rounded-xl border border-border-subtle bg-surface p-5">
-      <h2 className="text-sm font-medium">Edit details</h2>
-      <p className="mt-0.5 text-xs text-ink-muted">
+    <section className="glass rounded-2xl p-5">
+      <h2 className="text-sm font-semibold">Edit details</h2>
+      <p className="mt-1 text-xs text-ink-faint">
         Blank clears a field. Salary and skills from a pasted posting were checked against its
         text; anything you type here is taken as given.
       </p>
@@ -225,7 +227,10 @@ export function DetailsPanel({ application }) {
         ))}
 
         {error && (
-          <p className="col-span-2 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700" role="alert">
+          <p
+            className="col-span-2 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-sm text-danger"
+            role="alert"
+          >
             {error}
           </p>
         )}
@@ -234,14 +239,14 @@ export function DetailsPanel({ application }) {
           <button
             type="submit"
             disabled={save.isPending}
-            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-60"
+            className="cursor-pointer rounded-lg bg-accent px-3.5 py-2 text-sm font-semibold text-accent-ink transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-60"
           >
             {save.isPending ? 'Saving…' : 'Save'}
           </button>
           <button
             type="button"
             onClick={() => setEditing(false)}
-            className="rounded-lg border border-border-subtle px-3 py-1.5 text-sm transition hover:bg-surface-muted"
+            className="cursor-pointer rounded-lg border border-border-subtle px-3.5 py-2 text-sm text-ink-muted transition hover:border-border-strong hover:text-ink"
           >
             Cancel
           </button>
@@ -276,8 +281,8 @@ function diff(fields, draft, original) {
 function Row({ label, value }) {
   return (
     <div className="flex justify-between gap-4">
-      <dt className="text-ink-muted">{label}</dt>
-      <dd className="text-right font-medium">{value || '—'}</dd>
+      <dt className="text-ink-faint">{label}</dt>
+      <dd className={`text-right ${value ? 'font-medium' : 'text-ink-faint'}`}>{value || '—'}</dd>
     </div>
   )
 }

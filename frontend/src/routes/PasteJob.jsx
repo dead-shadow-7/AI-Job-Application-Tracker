@@ -1,11 +1,13 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Wand2 } from 'lucide-react'
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { PageHeader } from '@/components/PageHeader'
 import { ReviewExtraction } from '@/components/ReviewExtraction'
 import { api } from '@/lib/api'
 
 const FIELD =
-  'w-full rounded-lg border border-border-subtle px-3 py-2 text-sm outline-none focus:border-accent focus:ring-2 focus:ring-accent/20'
+  'well w-full rounded-xl px-3 py-2.5 text-sm outline-none transition placeholder:text-ink-faint focus:border-accent/40 focus:shadow-[0_0_0_3px] focus:shadow-accent/12 focus-visible:outline-none'
 
 export function PasteJob() {
   const navigate = useNavigate()
@@ -49,26 +51,21 @@ export function PasteJob() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
-      <div>
-        <Link to="/" className="text-sm text-ink-muted hover:text-accent">
-          ← Applications
-        </Link>
-        <h1 className="mt-2 text-lg font-semibold tracking-tight">Paste a job description</h1>
-        <p className="mt-0.5 text-sm text-ink-muted">
-          Copy the posting from anywhere and paste it below. You review everything before it
-          is saved.
-        </p>
-      </div>
+    <div className="mx-auto max-w-3xl space-y-5">
+      <PageHeader
+        back={{ to: '/', label: 'Applications' }}
+        title="Paste a job description"
+        subtitle="Copy the posting from anywhere and paste it below. You review everything before it is saved."
+      />
 
       <form
         onSubmit={(e) => {
           e.preventDefault()
           extract.mutate()
         }}
-        className="space-y-4 rounded-xl border border-border-subtle bg-surface p-5"
+        className="glass space-y-4 rounded-2xl p-5"
       >
-        <label className="block space-y-1.5">
+        <label className="block space-y-2">
           <span className="block text-sm font-medium">Job description</span>
           <textarea
             required
@@ -78,14 +75,14 @@ export function PasteJob() {
             placeholder="Paste the full posting — title, responsibilities, requirements, salary…"
             className={`${FIELD} font-mono text-xs leading-relaxed`}
           />
-          <span className="block text-xs text-ink-muted">
+          <span className="block font-mono text-xs text-ink-faint tabular-nums">
             {rawText.length.toLocaleString()} characters
             {rawText.length > 0 && rawText.length < 120 && ' — too short, paste the whole posting'}
           </span>
         </label>
 
         <div className="grid gap-4 sm:grid-cols-2">
-          <label className="block space-y-1.5">
+          <label className="block space-y-2">
             <span className="block text-sm font-medium">Job URL</span>
             <input
               type="url"
@@ -95,7 +92,7 @@ export function PasteJob() {
               className={FIELD}
             />
           </label>
-          <label className="block space-y-1.5">
+          <label className="block space-y-2">
             <span className="block text-sm font-medium">Platform</span>
             <input
               value={platform}
@@ -107,20 +104,27 @@ export function PasteJob() {
         </div>
 
         {extract.error && (
-          <p className="rounded-lg bg-rose-50 px-4 py-3 text-sm text-rose-700" role="alert">
+          <p
+            className="rounded-xl border border-danger/30 bg-danger/10 px-4 py-3 text-sm text-danger"
+            role="alert"
+          >
             {extract.error.message}
           </p>
         )}
 
         <div className="flex items-center justify-between gap-3">
-          <Link to="/applications/new" className="text-sm text-ink-muted hover:text-accent">
+          <Link
+            to="/applications/new"
+            className="text-sm text-ink-muted transition hover:text-accent"
+          >
             Or enter it by hand
           </Link>
           <button
             type="submit"
             disabled={extract.isPending || rawText.trim().length < 120}
-            className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-hover disabled:opacity-60"
+            className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-semibold text-accent-ink transition hover:bg-accent-hover disabled:cursor-not-allowed disabled:opacity-50"
           >
+            <Wand2 size={16} aria-hidden="true" />
             {extract.isPending ? 'Reading the posting…' : 'Extract'}
           </button>
         </div>

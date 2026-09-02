@@ -44,17 +44,19 @@ const COMPONENTS = {
   h3: styled('h3', 'mt-3 mb-1 font-semibold first:mt-0'),
   // A job URL the assistant quotes back should not navigate the drawer away
   // from the conversation that produced it.
-  a: styled('a', 'underline underline-offset-2', {
+  a: styled('a', 'text-accent underline underline-offset-2 transition hover:brightness-110', {
     target: '_blank',
     rel: 'noopener noreferrer',
   }),
-  code: styled('code', 'rounded bg-black/8 px-1 py-0.5 font-mono text-[0.9em]'),
+  // A light wash rather than a dark one: these sit on glass over an already
+  // dark canvas, and black-on-black is invisible.
+  code: styled('code', 'rounded bg-white/8 px-1 py-0.5 font-mono text-[0.9em]'),
   // The arbitrary variant undoes the inline treatment above for the `code` a
   // fence puts inside a `pre` — otherwise a block of code renders as a padded
   // pill inside a padded box.
   pre: styled(
     'pre',
-    `${BLOCK} overflow-x-auto rounded-lg bg-black/8 p-2 text-xs [&_code]:bg-transparent [&_code]:p-0`,
+    `${BLOCK} overflow-x-auto rounded-lg bg-black/25 p-2.5 font-mono text-xs [&_code]:bg-transparent [&_code]:p-0`,
   ),
   blockquote: styled('blockquote', `${BLOCK} border-l-2 border-border-subtle pl-2`),
   hr: styled('hr', 'my-2 border-border-subtle'),
