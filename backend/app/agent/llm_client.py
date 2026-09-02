@@ -20,6 +20,7 @@ from typing import Any, TypeVar
 import httpx
 from pydantic import BaseModel, ValidationError
 
+from app.agent.http_client import close_http_client, get_http_client
 from app.agent.tracing import as_llm_run, hide, record_model, traced
 from app.core.config import settings
 from app.core.exceptions import DomainError
@@ -38,44 +39,21 @@ T = TypeVar("T", bound=BaseModel)
 # is to wait or reduce max_completion_tokens.
 RETRYABLE_STATUS = {408, 409, 413, 429, 500, 502, 503, 504}
 
-# One pooled client per event loop. Building an AsyncClient per call discarded
-# the connection with it, so every round paid a fresh TCP and TLS handshake to a
-# remote host — six of them in an assistant turn, for nothing.
-_http_client: httpx.AsyncClient | None = None
-_http_loop: asyncio.AbstractEventLoop | None = None
-
-
-def get_http_client() -> httpx.AsyncClient:
-    """The shared client, rebuilt if the running loop has changed.
-
-    Keyed on the loop rather than on ``is_closed``: a pooled keep-alive
-    connection is bound to the loop that opened it, and after that loop closes
-    the client still reports ``is_closed == False``. Reusing it then raises
-    ``RuntimeError: Event loop is closed`` from deep inside httpcore. This is
-    the same hazard the test suite disposes the DB engine for — see the
-    docstring in tests/conftest.py — and it would otherwise bite the first
-    caller to run on a second loop (a script, or the scheduled sweep).
-    """
-    global _http_client, _http_loop
-    loop = asyncio.get_running_loop()
-    if _http_client is None or _http_client.is_closed or _http_loop is not loop:
-        _http_client = httpx.AsyncClient(
-            # Split rather than one scalar: a connect that hangs is a dead host
-            # and should fail fast, where a 60s read is just a long generation.
-            # One 90s number for both made them indistinguishable.
-            timeout=httpx.Timeout(settings.llm_timeout_seconds, connect=10.0),
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-        )
-        _http_loop = loop
-    return _http_client
-
-
-async def close_http_client() -> None:
-    global _http_client, _http_loop
-    if _http_client is not None:
-        await _http_client.aclose()
-        _http_client = None
-        _http_loop = None
+# Re-exported so `app.agent.llm_client.get_http_client` stays the name this
+# module's own requests resolve at call time — which is what the transport-level
+# tests patch, and what keeps them saying nothing about how the pool is cached.
+__all__ = [
+    "LLMClient",
+    "LLMError",
+    "LLMUsage",
+    "StreamEvent",
+    "StructuredResult",
+    "TextDelta",
+    "TurnComplete",
+    "close_http_client",
+    "get_http_client",
+    "llm_client",
+]
 
 
 class LLMError(DomainError):

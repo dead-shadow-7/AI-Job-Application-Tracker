@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.agent.llm_client import close_http_client
+from app.agent.http_client import close_http_client
 from app.agent.tracing import configure_tracing
 from app.api.v1 import health
 from app.api.v1.router import api_router
