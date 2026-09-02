@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import TERMINAL_STATUSES
@@ -199,6 +199,21 @@ async def resolve_application(session: AsyncSession, user_id: uuid.UUID, query: 
         return Resolution(candidates=[], query=query)
 
     pattern = f"%{cleaned}%"
+    # The query, as a value, so a column can be matched *inside* it. Both
+    # directions are needed and they answer different questions: "Amaz" is a
+    # prefix of the company, and "Backend Engineer at Amazon" contains it.
+    #
+    # Only the first direction existed, which made the scorer's best-rewarded
+    # phrasing unretrievable. Asked to act on "Software Developer at IQVIA" the
+    # resolver offered an unrelated "Gen AI - Engineer at Iris Software": no
+    # column contains the whole phrase, so the only predicate left was trigram
+    # similarity on the company — and that is a ratio, so "IQVIA" scored 0.214
+    # inside a long query while "Iris Software" reached 0.3125 on the strength
+    # of sharing the word "Software". The right row was never a candidate.
+    #
+    # Retrieval must stay at least as permissive as `score_candidate`, or a
+    # query it would rate 1.0 never gets the chance to be scored at all.
+    spoken = literal(cleaned)
     rows = list(
         (
             await session.execute(
@@ -210,10 +225,25 @@ async def resolve_application(session: AsyncSession, user_id: uuid.UUID, query: 
                     or_(
                         Company.name.ilike(pattern),
                         Job.title.ilike(pattern),
+                        # The company or the role named within a longer phrase.
+                        # Length-guarded: a one- or two-character name would
+                        # otherwise be a substring of nearly everything and drag
+                        # every application into the candidate list.
+                        and_(
+                            func.length(Company.name) > 2,
+                            spoken.ilike(func.concat("%", Company.name, "%")),
+                        ),
+                        and_(
+                            func.length(Job.title) > 2,
+                            spoken.ilike(func.concat("%", Job.title, "%")),
+                        ),
                         # Fall back to trigram similarity so a misspelling
                         # ("Amazn") still surfaces the row rather than silently
                         # returning nothing, which reads as "no such application".
+                        # On the title as well as the company, because the
+                        # scorer's approximate-spelling branch considers both.
                         func.similarity(Company.name, cleaned) > 0.3,
+                        func.similarity(Job.title, cleaned) > 0.3,
                     ),
                 )
             )
