@@ -15,7 +15,7 @@ import uuid
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
-from sqlalchemy import and_, func, literal, or_, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import TERMINAL_STATUSES
@@ -193,59 +193,46 @@ async def resolve_application(session: AsyncSession, user_id: uuid.UUID, query: 
     Deliberately scoped to one user's rows and never writes. A caller that
     wants to act must take ``best``, which is None unless one candidate is both
     strong and clearly ahead of the rest.
+
+    ``score_candidate`` is the only thing that decides what matches — see the
+    note below on why SQL no longer holds a second opinion.
     """
     cleaned = query.strip()
     if not cleaned:
         return Resolution(candidates=[], query=query)
 
-    pattern = f"%{cleaned}%"
-    # The query, as a value, so a column can be matched *inside* it. Both
-    # directions are needed and they answer different questions: "Amaz" is a
-    # prefix of the company, and "Backend Engineer at Amazon" contains it.
+    # No text filter. The scorer below decides what matches; SQL only decides
+    # whose rows these are.
     #
-    # Only the first direction existed, which made the scorer's best-rewarded
-    # phrasing unretrievable. Asked to act on "Software Developer at IQVIA" the
-    # resolver offered an unrelated "Gen AI - Engineer at Iris Software": no
-    # column contains the whole phrase, so the only predicate left was trigram
-    # similarity on the company — and that is a ratio, so "IQVIA" scored 0.214
-    # inside a long query while "Iris Software" reached 0.3125 on the strength
-    # of sharing the word "Software". The right row was never a candidate.
+    # There used to be a filter, and it was a standing source of the same bug
+    # twice. SQL and `score_candidate` were two descriptions of "does this
+    # match", written in different languages against different metrics, and they
+    # disagreed in ways nobody could see: a row the scorer would have rated 1.0
+    # was never fetched, so it was never rated. Asked to reject "Software
+    # Developer at IQVIA" the resolver offered "Gen AI - Engineer at Iris
+    # Software", because no column contained the whole phrase and trigram
+    # similarity is a ratio — "IQVIA" scored 0.214 inside a long query while
+    # "Iris Software" reached 0.3125 by sharing the word "Software". Widening
+    # the filter fixed that phrasing and left the next one: trigrams score a
+    # transposition ("Amzaon") at 0.27 while the scorer's SequenceMatcher rates
+    # it 0.6 and would happily ask "did you mean Amazon?".
     #
-    # Retrieval must stay at least as permissive as `score_candidate`, or a
-    # query it would rate 1.0 never gets the chance to be scored at all.
-    spoken = literal(cleaned)
+    # Chasing agreement between two similarity measures is not winnable. Having
+    # one is. Scoring every row the user owns makes retrieval trivially at least
+    # as permissive as scoring, because there is nothing left to be narrower
+    # than — and it deletes the half of the resolver that had no tests.
+    #
+    # Affordable because the set is one person's job applications, indexed on
+    # user_id: tens of rows, low hundreds for a long search. If that ever stops
+    # being true the answer is to push `score_candidate` into SQL as one
+    # expression, not to reintroduce a second opinion about what matches.
     rows = list(
         (
             await session.execute(
                 select(Application)
                 .join(Job, Job.id == Application.job_id)
                 .join(Company, Company.id == Job.company_id)
-                .where(
-                    Application.user_id == user_id,
-                    or_(
-                        Company.name.ilike(pattern),
-                        Job.title.ilike(pattern),
-                        # The company or the role named within a longer phrase.
-                        # Length-guarded: a one- or two-character name would
-                        # otherwise be a substring of nearly everything and drag
-                        # every application into the candidate list.
-                        and_(
-                            func.length(Company.name) > 2,
-                            spoken.ilike(func.concat("%", Company.name, "%")),
-                        ),
-                        and_(
-                            func.length(Job.title) > 2,
-                            spoken.ilike(func.concat("%", Job.title, "%")),
-                        ),
-                        # Fall back to trigram similarity so a misspelling
-                        # ("Amazn") still surfaces the row rather than silently
-                        # returning nothing, which reads as "no such application".
-                        # On the title as well as the company, because the
-                        # scorer's approximate-spelling branch considers both.
-                        func.similarity(Company.name, cleaned) > 0.3,
-                        func.similarity(Job.title, cleaned) > 0.3,
-                    ),
-                )
+                .where(Application.user_id == user_id)
             )
         )
         .unique()
