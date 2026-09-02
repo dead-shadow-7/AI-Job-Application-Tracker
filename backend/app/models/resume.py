@@ -38,6 +38,20 @@ class Resume(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     is_default: Mapped[bool] = mapped_column(nullable=False, default=False)
     years_experience: Mapped[float | None] = mapped_column(Numeric(4, 1))
 
+    # "stated" when the resume claims a number outright, "dates" when it was
+    # summed from employment history. Stored rather than recomputed because the
+    # two are not equally trustworthy, and a figure the resume never actually
+    # claimed should not be shown as though it did.
+    years_experience_source: Mapped[str | None] = mapped_column(String(20))
+
+    # Roles read out of the experience section: title, company, and dates.
+    # Derived from parsed_text and rebuilt by a re-parse, so this is a cache of
+    # the parse rather than a source of truth — JSONB rather than a table
+    # because nothing queries across it, it is only ever read whole.
+    positions: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, nullable=False, server_default="[]"
+    )
+
     # lazy="raise": chunks carry a 384-dimensional vector each, so loading them
     # to answer "how many?" would pull the entire embedding set for every
     # resume in a list. Anything needing a count uses an aggregate query;

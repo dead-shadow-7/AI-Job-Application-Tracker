@@ -100,6 +100,27 @@ async def test_the_passage_that_answers_a_requirement_is_retrieved(
     )
 
 
+async def test_an_accomplishment_outranks_the_skills_list_naming_the_same_tool(
+    client: AsyncClient,
+) -> None:
+    """The skills line names Kafka in six words; the bullet describes shipping a
+    Kafka pipeline. Both are on-topic, and the shorter one often embeds closer
+    to a short requirement precisely because it is short — which hands the
+    rubric a keyword list as its evidence and gets a met requirement judged as
+    barely evidenced. Section weighting is what stops that.
+    """
+    user, resume = await stored_resume(client)
+
+    async for session in open_user_session(user.user_id):
+        chunks = await retrieve_evidence(session, resume.id, "Experience with Apache Kafka")
+        break
+
+    assert chunks[0].section == "experience", (
+        "the strongest evidence should be the accomplishment, not the claim:\n"
+        + "\n".join(f"  [{c.section}] {c.content}" for c in chunks)
+    )
+
+
 async def test_retrieval_is_scoped_to_one_resume(client: AsyncClient) -> None:
     """The evidence for my match must not come from someone else's resume.
 

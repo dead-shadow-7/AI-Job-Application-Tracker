@@ -64,6 +64,104 @@ async def test_years_of_experience_is_detected_on_upload(
     body = (await upload_text(user)).json()
 
     assert body["years_experience"] == "4.0"
+    assert body["years_experience_source"] == "stated"
+
+
+DATED_RESUME = """\
+Aryan Jain
+Backend Engineer
+
+WORK EXPERIENCE
+
+Senior Backend Engineer, Fintech Co (Jan 2021 - Present)
+- Designed the double-entry ledger that reconciles every payout.
+- Implemented Kafka event pipelines for asynchronous order processing.
+
+Backend Engineer, Acme Technologies | March 2018 - December 2020
+- Designed FastAPI microservices on AWS handling 2 million requests per day.
+
+SKILLS
+Python, FastAPI, PostgreSQL, Kafka, Docker, Kubernetes, AWS
+
+EDUCATION
+B.Tech in Computer Science, Pune Institute of Technology, 2014 - 2018
+"""
+
+
+async def test_roles_are_extracted_from_the_experience_section(
+    client: AsyncClient, embeddings: StubEmbeddings
+) -> None:
+    user = await Session(client).start()
+
+    body = (await upload_text(user, body=DATED_RESUME)).json()
+
+    assert [(p["title"], p["company"]) for p in body["positions"]] == [
+        ("Senior Backend Engineer", "Fintech Co"),
+        ("Backend Engineer", "Acme Technologies"),
+    ]
+    assert body["positions"][0]["end"] is None, "the current role has no end date"
+
+
+async def test_years_are_inferred_when_the_resume_only_gives_dates(
+    client: AsyncClient, embeddings: StubEmbeddings
+) -> None:
+    """This is the common case. Leaving it null is not neutral: experience and
+    seniority both fall back to 0.5, so a quarter of every score goes constant."""
+    user = await Session(client).start()
+
+    body = (await upload_text(user, body=DATED_RESUME)).json()
+
+    assert body["years_experience_source"] == "dates"
+    assert float(body["years_experience"]) > 5
+
+
+# --- Re-parsing ------------------------------------------------------------
+
+
+async def test_reparsing_rebuilds_chunks_rather_than_duplicating_them(
+    client: AsyncClient, embeddings: StubEmbeddings
+) -> None:
+    """The point of keeping parsed_text is to benefit from a better parser
+    without re-uploading. Appending instead of replacing would double every
+    passage and hand the rubric the same evidence twice."""
+    user = await Session(client).start()
+    resume = (await upload_text(user, body=DATED_RESUME)).json()
+
+    reparsed = (await user.post(f"/api/v1/resumes/{resume['id']}/reparse", {})).json()
+
+    assert reparsed["chunk_count"] == resume["chunk_count"]
+    assert reparsed["positions"] == resume["positions"]
+    async for session in open_user_session(user.user_id):
+        stored = (await session.execute(text("SELECT count(*) FROM resume_chunks"))).scalar_one()
+    assert stored == resume["chunk_count"]
+
+
+async def test_reparsing_discards_scores_computed_from_the_old_parse(
+    client: AsyncClient, embeddings: StubEmbeddings
+) -> None:
+    """A cached score was produced from passages that no longer exist. Keeping
+    it is worse than having none — a stale score reads as a current one."""
+    user = await Session(client).start()
+    resume = (await upload_text(user, body=DATED_RESUME)).json()
+    application = await user.create_application(company_name="Razorpay", title="Backend Engineer")
+    scored = await user.post(f"/api/v1/applications/{application['id']}/match", {})
+    assert scored.status_code == 201, scored.text
+
+    await user.post(f"/api/v1/resumes/{resume['id']}/reparse", {})
+
+    assert (await user.get(f"/api/v1/applications/{application['id']}/match")).json() is None
+    refreshed = (await user.get(f"/api/v1/applications/{application['id']}")).json()
+    assert refreshed["match_score"] is None, "the denormalized copy must go too"
+
+
+async def test_another_users_resume_cannot_be_reparsed(
+    client: AsyncClient, embeddings: StubEmbeddings
+) -> None:
+    alice = await Session(client, "alice@example.com").start()
+    bob = await Session(client, "bob@example.com").start()
+    resume = (await upload_text(alice)).json()
+
+    assert (await bob.post(f"/api/v1/resumes/{resume['id']}/reparse", {})).status_code == 404
 
 
 async def test_first_upload_becomes_the_default(

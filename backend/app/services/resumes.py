@@ -2,22 +2,45 @@
 
 import logging
 import uuid
+from dataclasses import dataclass
+from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
 from app.core.exceptions import NotFoundError
-from app.models.resume import Resume, ResumeChunk
+from app.models.application import Application
+from app.models.resume import MatchAnalysis, Resume, ResumeChunk
 from app.services import embeddings
-from app.services.resume_parser import Chunk, chunk_resume, guess_years_experience
+from app.services.resume_parser import (
+    Chunk,
+    chunk_resume,
+    estimate_years_experience,
+    parse_positions,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _parse(text: str) -> tuple[list[Chunk], float | None]:
-    """The two synchronous regex passes over a resume, for one threadpool hop."""
-    return chunk_resume(text), guess_years_experience(text)
+@dataclass(frozen=True, slots=True)
+class ParsedResume:
+    chunks: list[Chunk]
+    years_experience: float | None
+    years_source: str | None
+    positions: list[dict[str, Any]]
+
+
+def _parse(text: str) -> ParsedResume:
+    """Every synchronous pass over a resume, in one threadpool hop."""
+    positions = parse_positions(text)
+    estimate = estimate_years_experience(text, positions)
+    return ParsedResume(
+        chunks=chunk_resume(text),
+        years_experience=estimate.years,
+        years_source=estimate.source,
+        positions=[p.as_dict() for p in positions],
+    )
 
 
 async def create_resume(
@@ -35,29 +58,86 @@ async def create_resume(
     of hundred milliseconds locally, and a resume that exists but is not yet
     searchable is a confusing state to have to explain in the UI.
     """
-    # Both regex passes in one threadpool hop. Small — 19ms on a 200-page
+    # Every regex pass in one threadpool hop. Small — 19ms on a 200-page
     # document, a fraction of a millisecond on a real resume — but it is the
     # last CPU left inline on this path now that parsing and embedding are
     # both offloaded, and doing it here keeps that true.
-    chunks, years = await run_in_threadpool(_parse, text)
+    parsed = await run_in_threadpool(_parse, text)
 
     resume = Resume(
         user_id=user_id,
         label=label.strip(),
         filename=filename,
         parsed_text=text,
-        years_experience=years,
+        years_experience=parsed.years_experience,
+        years_experience_source=parsed.years_source,
+        positions=parsed.positions,
     )
     session.add(resume)
     await session.flush()
 
-    await _embed_chunks(session, resume, chunks)
+    await _embed_chunks(session, resume, parsed.chunks)
 
     if make_default:
         await set_default(session, user_id=user_id, resume_id=resume.id)
 
     await session.flush()
     return resume
+
+
+async def reparse_resume(session: AsyncSession, resume: Resume) -> Resume:
+    """Re-run the parser over the stored text and replace what it produced.
+
+    The whole reason ``parsed_text`` is kept is that chunking, date reading, and
+    title extraction all improve over time, and asking someone to find and
+    re-upload a file to benefit from that is a poor trade. Chunks are deleted
+    and rebuilt rather than diffed: they are cheap to produce, and matching
+    old rows to new ones across a changed chunking strategy is not a problem
+    worth having.
+    """
+    parsed = await run_in_threadpool(_parse, resume.parsed_text)
+
+    await session.execute(delete(ResumeChunk).where(ResumeChunk.resume_id == resume.id))
+
+    resume.years_experience = parsed.years_experience
+    resume.years_experience_source = parsed.years_source
+    resume.positions = parsed.positions
+
+    await _embed_chunks(session, resume, parsed.chunks)
+    await discard_cached_scores(session, resume)
+    await session.flush()
+    return resume
+
+
+async def discard_cached_scores(session: AsyncSession, resume: Resume) -> int:
+    """Drop every cached score computed against this resume.
+
+    A re-parse changes both the passages the rubric was shown and the years the
+    arithmetic used, so a score cached before it no longer corresponds to
+    anything. Leaving it would be worse than having none, because a stale score
+    is indistinguishable from a current one.
+    """
+    job_ids = list(
+        (
+            await session.execute(
+                select(MatchAnalysis.job_id).where(MatchAnalysis.resume_id == resume.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not job_ids:
+        return 0
+
+    await session.execute(delete(MatchAnalysis).where(MatchAnalysis.resume_id == resume.id))
+    # match_score is denormalized onto the application so the dashboard can sort
+    # by it without a join, which means it has to be cleared alongside.
+    await session.execute(
+        update(Application)
+        .where(Application.user_id == resume.user_id, Application.job_id.in_(job_ids))
+        .values(match_score=None)
+    )
+    return len(job_ids)
 
 
 async def _embed_chunks(session: AsyncSession, resume: Resume, chunks: list[Chunk]) -> int:

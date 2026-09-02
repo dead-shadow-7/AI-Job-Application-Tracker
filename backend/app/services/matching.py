@@ -26,6 +26,7 @@ from app.models.job import Job, JobSkill
 from app.models.resume import Resume, ResumeChunk
 from app.models.skill import Skill
 from app.services import embeddings
+from app.services.resume_parser import seniority_from_title
 from app.services.skills import extract_skills_from_text
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,32 @@ WEIGHTS = {
 }
 
 EVIDENCE_PER_REQUIREMENT = 3
+
+# Multipliers on cosine *distance*, so above 1.0 is a penalty. Not all passages
+# are equally good evidence even when they are equally on-topic: a skills list
+# naming Kafka is a claim, an experience bullet describing a Kafka pipeline is
+# proof, and a degree that mentions distributed systems is neither. Retrieval
+# handing the rubric the skills line instead of the accomplishment is how a
+# requirement the candidate genuinely meets gets judged as barely evidenced.
+SECTION_PENALTY = {
+    "experience": 1.0,
+    "projects": 1.05,
+    "publications": 1.15,
+    "summary": 1.2,
+    "skills": 1.25,
+    "certifications": 1.3,
+    "awards": 1.35,
+    "education": 1.4,
+}
+UNSECTIONED_PENALTY = 1.1
+"""Untagged text is usually experience the parser could not attribute, so it is
+treated as slightly worse than experience rather than as worst."""
+
+# Candidates pulled before re-ranking, as a multiple of what is returned. The
+# vector index still does the search; weighting only reorders its shortlist, so
+# a genuinely irrelevant experience bullet cannot outrank a relevant one merely
+# for being in the right section.
+EVIDENCE_OVERFETCH = 4
 
 
 @dataclass
@@ -98,12 +125,44 @@ def score_experience(
     return max(0.5, 1.0 - (excess / max(high, 1)) * 0.25)
 
 
-def score_seniority(job_seniority: str | None, candidate_years: float | None) -> float:
+def _level_from_years(candidate_years: float) -> int:
+    """Seniority implied by tenure alone. Coarse on purpose — it is a proxy."""
+    if candidate_years < 1:
+        return 0
+    if candidate_years < 2:
+        return 1
+    if candidate_years < 5:
+        return 2
+    if candidate_years < 8:
+        return 3
+    if candidate_years < 12:
+        return 4
+    return 5
+
+
+def _level_from_titles(titles: list[str]) -> int | None:
+    """The highest level any held title states outright.
+
+    The most senior title reached, not the current one: a Staff Engineer now
+    consulting is not junior again. Titles stating no level ("Software
+    Engineer") contribute nothing rather than defaulting to mid — a resume of
+    those should fall through to the years proxy, not be pinned at 2.
+    """
+    ranks = [SENIORITY_RANK[level] for title in titles if (level := seniority_from_title(title))]
+    return max(ranks) if ranks else None
+
+
+def score_seniority(
+    job_seniority: str | None,
+    candidate_years: float | None,
+    candidate_titles: list[str] | None = None,
+) -> float:
     """Ordinal distance between the posting's level and the candidate's.
 
-    Years are the only signal available for the candidate side, so the mapping
-    is coarse on purpose — it is worth 10% of the total and should not pretend
-    to more precision than it has.
+    Held titles are preferred over tenure where the resume gives them. Years are
+    only a proxy for level — they cannot tell a six-year engineer who was
+    promoted to Staff from one who was not — whereas a title is the candidate's
+    own statement of where they landed.
     """
     if not job_seniority:
         return 0.5
@@ -111,21 +170,12 @@ def score_seniority(job_seniority: str | None, candidate_years: float | None) ->
         target = SENIORITY_RANK[Seniority(job_seniority)]
     except (KeyError, ValueError):
         return 0.5
-    if candidate_years is None:
-        return 0.5
 
-    if candidate_years < 1:
-        implied = 0
-    elif candidate_years < 2:
-        implied = 1
-    elif candidate_years < 5:
-        implied = 2
-    elif candidate_years < 8:
-        implied = 3
-    elif candidate_years < 12:
-        implied = 4
-    else:
-        implied = 5
+    implied = _level_from_titles(candidate_titles or [])
+    if implied is None:
+        if candidate_years is None:
+            return 0.5
+        implied = _level_from_years(candidate_years)
 
     distance = abs(target - implied)
     return max(0.0, 1.0 - distance * 0.25)
@@ -137,25 +187,33 @@ async def retrieve_evidence(
     query: str,
     limit: int = EVIDENCE_PER_REQUIREMENT,
 ) -> list[ResumeChunk]:
-    """Resume passages most relevant to one requirement.
+    """Resume passages most relevant to one requirement, best evidence first.
 
-    This is what pgvector is for here. The ordering is done in Postgres so the
-    HNSW index is used; pulling chunks into Python to compare them would make
-    the index pointless.
+    Two steps, and the split is deliberate. Postgres does the vector search, so
+    the HNSW index is used — pulling chunks into Python to compare them would
+    make the index pointless. Section weighting is then applied to that
+    shortlist in Python, because folding it into the ORDER BY would make the
+    expression non-indexable and turn every requirement into a sequential scan.
     """
     vector = await embeddings.embedding_provider.embed_query(query)
-    return list(
-        (
-            await session.execute(
-                select(ResumeChunk)
-                .where(ResumeChunk.resume_id == resume_id)
-                .order_by(ResumeChunk.embedding.cosine_distance(vector))
-                .limit(limit)
-            )
+    distance = ResumeChunk.embedding.cosine_distance(vector).label("distance")
+
+    rows = (
+        await session.execute(
+            select(ResumeChunk, distance)
+            .where(ResumeChunk.resume_id == resume_id)
+            .order_by(distance)
+            .limit(limit * EVIDENCE_OVERFETCH)
         )
-        .scalars()
-        .all()
+    ).all()
+
+    ranked = sorted(
+        rows,
+        key=lambda row: (
+            row.distance * SECTION_PENALTY.get(row.ResumeChunk.section or "", UNSECTIONED_PENALTY)
+        ),
     )
+    return [row.ResumeChunk for row in ranked[:limit]]
 
 
 @dataclass
@@ -199,6 +257,7 @@ async def compute_deterministic_match(
     seniority = score_seniority(
         job.seniority,
         float(resume.years_experience) if resume.years_experience is not None else None,
+        [title for p in resume.positions if (title := p.get("title"))],
     )
 
     subscores = {

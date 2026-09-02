@@ -211,6 +211,9 @@ export const api = {
   uploadResumeFile: (file, label) => uploadResume(file, label),
   uploadResumeText: (body) => apiFetch('/api/v1/resumes/text', { method: 'POST', body }),
   setDefaultResume: (id) => apiFetch(`/api/v1/resumes/${id}/default`, { method: 'POST' }),
+  // Re-reads the stored text with the current parser. Discards scores computed
+  // from the previous parse, so `match` caches must be invalidated after it.
+  reparseResume: (id) => apiFetch(`/api/v1/resumes/${id}/reparse`, { method: 'POST' }),
   deleteResume: (id) => apiFetch(`/api/v1/resumes/${id}`, { method: 'DELETE' }),
 
   getMatch: (applicationId) => apiFetch(`/api/v1/applications/${applicationId}/match`),

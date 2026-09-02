@@ -18,6 +18,16 @@ export function formatDayMonth(value) {
   return new Date(value).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
 }
 
+/** "Jan 2021" from the "YYYY-MM" a parsed resume position carries.
+ *  Built from the parts rather than parsed as a Date: "2021-01" is read as UTC
+ *  midnight, which in any negative-offset timezone renders as December 2020. */
+export function formatMonth(value) {
+  if (!value) return 'Present'
+  const [year, month] = value.split('-')
+  const name = new Date(2000, Number(month) - 1, 1).toLocaleDateString('en-IN', { month: 'short' })
+  return `${name} ${year}`
+}
+
 export function daysBetween(value, from = new Date()) {
   if (!value) return 0
   const ms = from - new Date(value)

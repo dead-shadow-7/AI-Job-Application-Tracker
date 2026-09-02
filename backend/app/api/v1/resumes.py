@@ -15,10 +15,23 @@ from app.services.resumes import (
     create_resume,
     get_resume,
     list_resumes,
+    reparse_resume,
     set_default,
 )
 
 router = APIRouter(prefix="/resumes", tags=["resumes"])
+
+
+class PositionRead(BaseModel):
+    """One role the parser read out of the experience section."""
+
+    title: str | None = None
+    company: str | None = None
+    start: str
+    """``YYYY-MM``. A bare year in the resume is read as mid-year."""
+    end: str | None = None
+    """``None`` while the role is still held."""
+    months: int
 
 
 class ResumeRead(BaseModel):
@@ -29,6 +42,11 @@ class ResumeRead(BaseModel):
     filename: str | None = None
     is_default: bool
     years_experience: Decimal | None = None
+    years_experience_source: str | None = None
+    """``stated`` if the resume claims the number, ``dates`` if it was summed
+    from employment history. Sent so the UI never presents an inferred figure
+    as one the candidate stood behind."""
+    positions: list[PositionRead] = []
     created_at: datetime
     chunk_count: int = 0
 
@@ -99,6 +117,24 @@ async def make_default(resume_id: UUID, user: CurrentUser, session: DbSession) -
     # but expire_all() would also expire `user`, and reading user.id afterwards
     # would then need a lazy round trip that async cannot make.
     await session.refresh(resume)
+    return await _read_one(session, resume)
+
+
+@router.post(
+    "/{resume_id}/reparse",
+    response_model=ResumeRead,
+    summary="Re-read the stored text with the current parser",
+)
+async def reparse(resume_id: UUID, user: CurrentUser, session: DbSession) -> ResumeRead:
+    """Rebuild chunks, dates, and roles from the text already stored.
+
+    Chunking and extraction improve; a resume uploaded before an improvement
+    should be able to benefit from it without the user having to find the
+    original file again. Cached scores computed against the previous parse are
+    discarded, since they were produced from passages that no longer exist.
+    """
+    resume = await get_resume(session, resume_id, user.id)
+    await reparse_resume(session, resume)
     return await _read_one(session, resume)
 
 

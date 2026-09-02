@@ -469,7 +469,7 @@ flowchart LR
 
     subgraph rag["Grounded judgement — 15%, capped"]
         direction TB
-        REQ["each requirement"] --> RET["retrieve top-k resume chunks<br/>pgvector over resume_chunks"]
+        REQ["each requirement"] --> RET["retrieve top-k resume chunks<br/>pgvector, re-ranked by section"]
         RET --> JUDGE["model judges against<br/>your actual bullet points"]
     end
 
@@ -491,8 +491,27 @@ posting never stated scores `0.5` — unknown, neither rewarded nor punished —
 four subscores at exactly 50% is not a bug, it is the scorer declining to
 pretend it knows anything about a job with no details recorded.
 
+Two of those four subscores need a number from *your* side, and most resumes
+never state one. They write the dates and leave the arithmetic to the reader, so
+`years of experience` and `seniority` were both falling back to `0.5` on almost
+every upload — a quarter of the score, constant. The parser now reads the
+employment history instead: role headers with their dates, merged where they
+overlap so a promotion listed twice is not counted twice, with education and
+bullet-point dates excluded. Seniority prefers the titles actually held over
+tenure, because years cannot tell the engineer who made Staff from the one who
+did not. Whether a figure was claimed by the resume or summed from its dates is
+stored and shown, since those are not equally strong claims.
+
+Retrieval is weighted by section for the same reason. A skills line reading
+`Python, Kafka, Docker` embeds closer to "experience with Kafka" than a bullet
+describing a Kafka pipeline does — it is shorter and denser — so the rubric was
+being handed the keyword list as its evidence. An accomplishment outranks a
+claim now, and a degree outranks neither.
+
 Embeddings run locally via fastembed. Your resume never leaves the machine,
-which is simpler than any policy about how a vendor may use it.
+which is simpler than any policy about how a vendor may use it. The extracted
+text is kept so a resume can be re-read when the parser improves, without
+asking you to find the original file again.
 
 ## The timeline is the point
 
