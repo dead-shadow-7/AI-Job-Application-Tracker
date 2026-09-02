@@ -1,0 +1,12 @@
+AI/ML Intern
+Setoo Technologies - Pune, India (Onsite)
+
+A six-month internship on our applied research team. You will help evaluate
+retrieval strategies, run experiments, and write up results.
+
+Requirements
+- Currently pursuing a degree in Computer Science or a related field
+- Coursework or projects involving Python
+- Familiarity with PyTorch is welcome
+
+Stipend details will be shared during the interview process.

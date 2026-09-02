@@ -1,0 +1,13 @@
+Site Reliability Engineer
+Aldergate Networks
+
+Aldergate keeps critical network infrastructure running for telecom operators.
+You will join the SRE team owning our monitoring, alerting and incident
+response.
+
+Requirements
+- 4+ years in SRE or operations
+- Strong Linux fundamentals
+- Experience with Prometheus and Terraform
+
+We operate an on-call rotation shared across the team.

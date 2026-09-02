@@ -1,0 +1,12 @@
+Our Engineering Culture
+
+At Brightmoor we believe that good software comes from small teams with real
+ownership. Over the last four years we have grown from six engineers to forty,
+and we have worked hard to keep the things that made the early days work:
+short feedback loops, written decisions, and a bias toward shipping.
+
+We write design documents for anything that will outlive a sprint. We review
+each other's code carefully and kindly. We keep our on-call load low enough that
+nobody dreads the pager.
+
+If any of that sounds like the way you want to work, keep an eye on this space.

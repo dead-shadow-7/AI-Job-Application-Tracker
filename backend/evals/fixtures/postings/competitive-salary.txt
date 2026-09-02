@@ -1,0 +1,14 @@
+Data Engineer
+Meridian Analytics - Hyderabad, India (Onsite)
+
+Build and maintain the pipelines that feed our analytics products. You will work
+with Airflow, dbt and Snowflake, and partner with analysts to model data that
+hundreds of people query daily.
+
+Requirements
+- 4+ years in data engineering
+- Strong SQL and Python
+- Production experience with Airflow
+
+We offer a competitive salary and a comprehensive benefits package, including
+health cover and an annual learning budget.

@@ -1,0 +1,43 @@
+{
+  "_comment": [
+    "Aggregate floors, per surface. Hard-gated safety metrics are not here —",
+    "they are per-case and absolute, and live in the case files as gate:hard.",
+    "",
+    "Set from a recorded baseline rather than from ambition. A gate above what",
+    "the model in production actually scores fails the shipped system, which",
+    "teaches everyone to pass -m 'not eval'. Raise one only with a run behind",
+    "it, and say which in the commit message.",
+    "",
+    "tool_selection is 0.90 on purpose: the two hand-run results this project",
+    "already recorded were 10/10 and 9/10, and a gate must not retroactively",
+    "fail the model that is running today.",
+    "",
+    "skill_recall is 0.65 from measurement. gpt-4o-mini returned NO skills at",
+    "all for a posting naming Go and Kubernetes in prose rather than in a",
+    "requirements list — a real weakness, recorded rather than tuned away. With",
+    "three skill cases one miss moves the mean 33 points, so this number is",
+    "noisy; more cases would steady it before it is worth raising."
+  ],
+  "extraction": {
+    "skill_precision": 1.0,
+    "salary_verbatim": 1.0,
+    "salary_units": 0.85,
+    "needs_review": 0.9,
+    "confidence_direction": 0.85,
+    "skill_recall": 0.65,
+    "requirement_kind": 0.85
+  },
+  "assistant": {
+    "tool_selection": 0.9,
+    "forbidden_tool": 1.0,
+    "query_fidelity": 1.0,
+    "no_invented_dates": 1.0,
+    "brevity": 0.8
+  },
+  "rubric": {
+    "evidence_only": 1.0,
+    "score_band": 0.75,
+    "strength_groundedness": 0.9,
+    "gap_specificity": 0.85
+  }
+}

@@ -1,0 +1,12 @@
+Frontend Engineer
+Kestrel Labs - Chennai, India (Hybrid)
+
+Build the interfaces our customers use every day. You will work in React and
+TypeScript, partner closely with design, and own features end to end.
+
+Requirements
+- 3+ years building production web applications
+- Strong React and TypeScript
+- Comfortable with CSS and accessibility work
+
+Compensation: 18 LPA.

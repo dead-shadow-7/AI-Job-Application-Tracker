@@ -1,0 +1,17 @@
+Senior Backend Engineer
+Razorpay - Bangalore, India (Hybrid)
+
+We are looking for a Senior Backend Engineer to join the Payments team.
+You will design and operate high-throughput services processing millions of
+transactions daily, own systems end to end, and mentor junior engineers.
+
+Requirements
+- 5+ years of backend engineering experience
+- Strong proficiency in Python and SQL
+- Deep experience with PostgreSQL at scale
+- Hands-on experience with Kafka
+
+Nice to have
+- Experience with Kubernetes and Docker
+
+Compensation: 45-60 LPA depending on experience.

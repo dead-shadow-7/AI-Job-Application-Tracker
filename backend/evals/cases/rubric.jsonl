@@ -1,0 +1,37 @@
+// Rubric cases: judgement only, with the evidence supplied by hand.
+//
+// No database, no embeddings, no retrieval. That separation is the point — a
+// requirement whose evidence retrieval missed *should* score as unmet under
+// rule 1, so an eval that ran retrieval could not tell a judgement failure from
+// an index failure. Retrieval quality is measured separately and for free in
+// tests/test_matching_retrieval.py.
+//
+// `requirements` is a list of [requirement, [evidence passages]]. An empty
+// evidence list is rendered to the model as "(nothing relevant found in the
+// resume)" — which is the case rule 1 exists for, and the reason `unevidenced`
+// cases are hard-gated.
+//
+// Bands are 0.3 wide. The rubric is worth 15 of 100 points, so a tighter band
+// would be finer resolution than the output can act on.
+
+// --- Rule 1: absence of evidence is absence ---------------------------------
+{"id": "unevidenced-is-a-gap", "rule": "1", "gate": "hard", "title": "Streaming Engineer", "company": "Northwind", "unevidenced": "Kafka", "requirements": [["5+ years of Kafka in production", []], ["Strong Python", ["Built and maintained Python services on FastAPI for four years."]]], "matched_skills": ["Python"], "missing_skills": ["Kafka"], "score_band": [0.2, 0.6]}
+{"id": "no-inferring-a-framework-from-a-language", "rule": "1", "gate": "hard", "title": "Django Developer", "company": "Bluepeak", "unevidenced": "Django", "requirements": [["Production Django experience", []], ["Python fundamentals", ["Five years writing Python, mostly data pipelines and CLI tooling."]]], "matched_skills": ["Python"], "missing_skills": ["Django"], "score_band": [0.2, 0.6]}
+{"id": "no-inferring-orchestration-from-cloud", "rule": "1", "gate": "hard", "title": "Platform Engineer", "company": "Halden", "unevidenced": "Kubernetes", "requirements": [["Operating Kubernetes at scale", []], ["AWS experience", ["Ran production workloads on AWS EC2 and RDS for three years."]]], "matched_skills": ["AWS"], "missing_skills": ["Kubernetes"], "score_band": [0.2, 0.6]}
+{"id": "everything-unevidenced-scores-low", "rule": "1", "gate": "hard", "title": "Embedded Engineer", "company": "Aldergate", "unevidenced": "C++", "requirements": [["Strong C++", []], ["RTOS experience", []], ["Hardware debugging", []]], "matched_skills": [], "missing_skills": ["C++", "RTOS"], "score_band": [0.0, 0.3]}
+
+// --- Calibration against the stated anchors ---------------------------------
+{"id": "nearly-everything-evidenced-scores-high", "rule": "4", "title": "Backend Engineer", "company": "Razorpay", "requirements": [["Strong Python", ["Four years building Python services with FastAPI."]], ["PostgreSQL at scale", ["Owned the PostgreSQL schema for a payments ledger handling 2M rows a day."]], ["REST API design", ["Designed and documented the public REST API used by 40 partner integrations."]]], "matched_skills": ["Python", "PostgreSQL"], "missing_skills": [], "score_band": [0.75, 1.0]}
+{"id": "about-half-evidenced-scores-around-half", "rule": "4", "title": "Full Stack Engineer", "company": "Kestrel", "requirements": [["Strong React", ["Built the customer dashboard in React and TypeScript."]], ["Backend Python", ["Wrote the FastAPI service behind the dashboard."]], ["Kubernetes operations", []], ["Terraform", []]], "matched_skills": ["React", "Python"], "missing_skills": ["Kubernetes", "Terraform"], "score_band": [0.35, 0.7]}
+{"id": "a-weak-match-is-scored-as-one", "rule": "4", "title": "Machine Learning Engineer", "company": "Orion Health", "requirements": [["PyTorch in production", []], ["Medical imaging background", []], ["Python", ["Three years of Python, mostly web backends."]]], "matched_skills": ["Python"], "missing_skills": ["PyTorch"], "score_band": [0.1, 0.45]}
+
+// --- Rule 2: a strength must point at something the resume says -------------
+{"id": "strengths-are-traceable", "rule": "2", "title": "Data Engineer", "company": "Meridian", "requirements": [["Airflow in production", ["Ran a 200-DAG Airflow deployment and owned its migration to Airflow 2."]], ["Strong SQL", ["Wrote the dbt models powering the finance team's reporting."]]], "matched_skills": ["Airflow", "SQL"], "missing_skills": [], "score_band": [0.7, 1.0]}
+{"id": "strengths-stay-grounded-when-evidence-is-thin", "rule": "2", "title": "Site Reliability Engineer", "company": "Aldergate", "requirements": [["Linux fundamentals", ["Comfortable debugging Linux systems under load."]], ["Prometheus", []], ["Terraform", []]], "matched_skills": ["Linux"], "missing_skills": ["Prometheus", "Terraform"], "score_band": [0.15, 0.5]}
+
+// --- Rule 3: a gap names the missing thing ----------------------------------
+{"id": "gaps-name-the-missing-requirement", "rule": "3", "title": "Streaming Engineer", "company": "Northwind", "unevidenced": "Kafka", "requirements": [["Kafka experience", []], ["Distributed systems", ["Operated a sharded PostgreSQL cluster across three regions."]]], "matched_skills": [], "missing_skills": ["Kafka"], "score_band": [0.2, 0.6]}
+{"id": "gaps-when-seniority-is-the-shortfall", "rule": "3", "title": "Director of Engineering", "company": "Vantage", "unevidenced": "leading leaders", "requirements": [["12+ years including leading leaders", []], ["Low-latency systems", ["Tuned an order-matching path from 8ms to 1.2ms."]]], "matched_skills": [], "missing_skills": [], "score_band": [0.15, 0.55]}
+
+// --- Ignoring what the prompt says to ignore --------------------------------
+{"id": "prestige-does-not-raise-the-score", "rule": "5", "title": "Software Engineer", "company": "Globex International", "unevidenced": "Rust", "requirements": [["Systems programming in Rust", []], ["Concurrency", ["Used Python asyncio for a high-throughput ingest service."]]], "matched_skills": [], "missing_skills": ["Rust"], "score_band": [0.1, 0.5]}

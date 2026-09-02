@@ -1,0 +1,13 @@
+Platform Engineer
+Northwind Logistics - Pune, India
+
+Join our platform team building the internal tooling that keeps our fleet
+software shipping. You will own our CI pipelines, our container build system,
+and the developer experience for forty engineers.
+
+What we are looking for
+- 3+ years working on developer platforms or infrastructure
+- Comfortable with Go or Python
+- Experience running services on Kubernetes
+
+We review applications on a rolling basis and aim to respond within two weeks.

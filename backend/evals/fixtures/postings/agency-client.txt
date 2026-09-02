@@ -1,0 +1,13 @@
+Machine Learning Engineer
+Posted by Talentbridge Recruitment on behalf of our client, Orion Health
+
+Our client Orion Health is expanding its clinical AI team in Bengaluru and has
+asked us to find a Machine Learning Engineer. This is a permanent role with
+Orion Health; Talentbridge manages the hiring process only.
+
+Requirements
+- 4+ years applying machine learning in production
+- Strong Python and PyTorch
+- Experience with medical or regulated data is valued
+
+Work mode: Hybrid, three days on site.

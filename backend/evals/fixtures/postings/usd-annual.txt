@@ -1,0 +1,13 @@
+Staff Software Engineer, Infrastructure
+Halden Systems - Remote (United States)
+
+Halden is building observability tooling for large Kubernetes estates. As a
+Staff Engineer you will set technical direction for our ingest pipeline and
+mentor across three teams.
+
+Requirements
+- 8+ years of software engineering experience
+- Deep experience with Go
+- Production ownership of distributed systems
+
+Base salary range: $120,000 - $150,000 per year, plus equity.

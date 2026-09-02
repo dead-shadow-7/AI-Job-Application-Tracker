@@ -1,0 +1,13 @@
+Junior QA Engineer
+Bluepeak Software - Ahmedabad, India
+
+We are hiring a Junior QA Engineer to join our testing practice. You will write
+and maintain automated test suites, triage incoming bug reports, and work with
+developers on release readiness.
+
+Requirements
+- 1+ years of software testing experience
+- Familiarity with Selenium
+- Basic knowledge of Python
+
+Salary: Rs 80,000 per month.

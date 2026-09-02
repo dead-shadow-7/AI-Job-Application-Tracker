@@ -1,0 +1,17 @@
+About the job
+
+We are looking for a Senior Data Scientist to join our growing team. You will
+partner with product and engineering to design experiments, build models, and
+turn messy behavioural data into decisions the business can act on.
+
+What you will do
+- Design and analyse A/B tests
+- Build forecasting models in Python
+- Present findings to senior stakeholders
+
+What we are looking for
+- 5+ years in an applied data science role
+- Strong statistics and experimental design
+- Fluency in Python and SQL
+
+Join our team and help shape how we use data.

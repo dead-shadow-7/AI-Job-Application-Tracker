@@ -1,0 +1,50 @@
+// Assistant cases: which tool, with which arguments.
+//
+// `seed` names a world in tests/evals/seeds.py, built through the real API so
+// RLS scoping and event-derived status are real rather than fixture-shaped.
+//
+// The first ten reconstruct the hand-run tool-selection eval whose results are
+// recorded three times in this repo with contradictory numbers — 20 tools vs
+// 22, 9/10 vs 10/10. Running them is how those stop disagreeing.
+//
+// `expect_not_tool` is hard-gated. Picking the wrong tool is not a near miss:
+// it records an approximation of what was asked for, and the transcript then
+// says the thing was done.
+
+// --- The original tool-selection set ----------------------------------------
+{"id": "select-list", "seed": "two_amazon_roles", "message": "what am I tracking?", "expect_tool": {"any_of": ["list_applications"]}, "expect_brief": true}
+{"id": "select-details", "seed": "two_amazon_roles", "message": "tell me about the Data Engineer role at Amazon", "expect_tool": {"any_of": ["get_application_details", "search_applications"]}, "expect_brief": true}
+{"id": "select-timeline", "seed": "stale_applied_nine_days", "message": "what has happened with the Razorpay one so far?", "expect_tool": {"any_of": ["get_timeline", "get_application_details"]}}
+{"id": "select-attention", "seed": "stale_applied_nine_days", "message": "which of these have gone quiet?", "expect_tool": {"any_of": ["list_needing_attention"]}}
+{"id": "select-analytics", "seed": "stale_applied_nine_days", "message": "how am I doing overall?", "expect_tool": {"any_of": ["get_analytics"]}}
+{"id": "select-skill-demand", "seed": "two_amazon_roles", "message": "which skills come up most across my applications?", "expect_tool": {"any_of": ["get_skill_demand", "find_by_skill"]}}
+{"id": "select-by-skill", "seed": "two_amazon_roles", "message": "which of my roles ask for Kubernetes?", "expect_tool": {"any_of": ["find_by_skill", "get_skill_demand"]}}
+{"id": "select-description", "seed": "long_description_job", "message": "show me the original posting for the Foundry one", "expect_tool": {"any_of": ["get_job_description"]}, "expect_not_tool": ["get_application_details"], "gate": "hard", "rule": "3a"}
+{"id": "select-upcoming", "seed": "stale_applied_nine_days", "message": "do I have any interviews coming up?", "expect_tool": {"any_of": ["get_upcoming_interviews"]}}
+{"id": "select-compare", "seed": "two_amazon_roles", "message": "compare the two Amazon roles for me", "expect_tool": {"any_of": ["compare_applications", "list_applications"]}}
+
+// --- Rule 1: the user's words reach the query argument ----------------------
+{"id": "rule1-copy-their-words", "rule": "1", "gate": "hard", "seed": "one_iqvia_application", "message": "what did the IQVIA one ask for?", "expect_query_contains": "IQVIA", "expect_tool": {"any_of": ["get_application_details", "search_applications", "list_applications"]}}
+{"id": "rule1-colloquial-reference", "rule": "1", "seed": "stale_applied_nine_days", "message": "remind me what the Razorpay one was about", "expect_query_contains": "Razorpay"}
+
+// --- Rule 2: ambiguity is a question, not a guess ---------------------------
+{"id": "rule2-two-roles-one-company", "rule": "2", "gate": "hard", "seed": "two_amazon_roles", "message": "mark the Amazon one as rejected", "expect_no_proposal": true, "rationale": "two Amazon roles; the resolver refuses and the model must relay the question"}
+
+// --- Rule 3: status comes from events, never from an update -----------------
+{"id": "rule3-status-is-an-event", "rule": "3", "gate": "hard", "seed": "one_iqvia_application", "message": "update the status of Software Developer at IQVIA to rejected", "expect_not_tool": ["propose_update"], "expect_tool": {"any_of": ["propose_event", "search_applications", "get_application_details", "list_applications"]}}
+
+// --- Rule 3a: the tool that does the thing, or say you cannot ---------------
+{"id": "rule3a-description-edit-not-a-note", "rule": "3a", "gate": "hard", "seed": "long_description_job", "message": "remove the line 'Equal opportunity employer statement follows.' from the Foundry description", "expect_not_tool": ["propose_update"]}
+
+// --- Rule 4: no invented dates ----------------------------------------------
+{"id": "rule4-relative-dates-only", "rule": "4", "gate": "hard", "seed": "one_iqvia_application", "message": "I heard back from IQVIA three days ago, log that", "expect_tool": {"any_of": ["propose_event", "search_applications", "get_application_details"]}}
+
+// --- Rule 5: a pasted posting goes to the posting tool ----------------------
+{"id": "rule5-named-role-is-not-a-posting", "rule": "5", "gate": "hard", "seed": "empty", "message": "add the SDE role at Flipkart to my tracker", "expect_not_tool": ["propose_tracked_posting"], "expect_tool": {"any_of": ["propose_new_application", "list_applications", "search_applications"]}}
+
+// --- Rule 2a: look before saying something is not there ---------------------
+{"id": "rule2a-look-before-denying", "rule": "2a", "seed": "one_iqvia_application", "message": "do I have anything from IQVIA?", "expect_tool": {"any_of": ["search_applications", "list_applications", "get_application_details"]}, "expect_brief": true}
+
+// --- Rule 7: brevity --------------------------------------------------------
+{"id": "rule7-short-answer", "rule": "7", "seed": "two_amazon_roles", "message": "how many applications am I tracking?", "expect_brief": true}
+{"id": "rule7-no-essay-on-a-simple-lookup", "rule": "7", "seed": "stale_applied_nine_days", "message": "what status is the Razorpay one in?", "expect_brief": true}

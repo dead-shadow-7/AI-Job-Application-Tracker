@@ -37,3 +37,4 @@ backups/
 .idea/
 .DS_Store
 Thumbs.db
+backend/evals/runs/

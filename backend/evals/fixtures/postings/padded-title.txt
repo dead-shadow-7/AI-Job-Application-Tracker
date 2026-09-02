@@ -1,0 +1,12 @@
+Senior Backend Engineer - Bangalore (Remote)
+Foundry Commerce
+
+Foundry Commerce runs checkout infrastructure for mid-market retailers. We are
+hiring a senior engineer to own our order service.
+
+Requirements
+- 6+ years of backend experience
+- Strong Python
+- Experience with PostgreSQL and Redis
+
+This role is fully remote within India.

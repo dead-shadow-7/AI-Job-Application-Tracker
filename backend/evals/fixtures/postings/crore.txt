@@ -1,0 +1,12 @@
+Director of Engineering
+Vantage Capital Technologies - Mumbai, India (Onsite)
+
+Lead a division of sixty engineers building trading infrastructure. You will own
+architecture, hiring and delivery for the execution platform.
+
+Requirements
+- 12+ years of engineering experience, including 4+ leading leaders
+- Background in low-latency systems
+- Experience with Java or C++
+
+Total compensation: 1.2 Cr per annum.
