@@ -10,6 +10,7 @@ from collections.abc import Mapping
 from decimal import Decimal
 from typing import Any
 
+from app.agent.validation import ValidationReport
 from app.schemas.extraction import ExtractedJob
 from app.schemas.ingest import JobDraft
 from app.schemas.job import RequirementIn
@@ -19,6 +20,26 @@ from app.services.skills import SkillResolution
 # the Amazon SDE role" burns a model call to learn what the sentence already
 # says, and returns a confident record built from nothing.
 MIN_POSTING_CHARS = 400
+
+# Below this, the review screen opens with fields flagged rather than merely
+# available. The model reports its own confidence; validation warnings override
+# it, since a confident extraction with a discarded salary still needs eyes.
+REVIEW_CONFIDENCE_THRESHOLD = 0.75
+
+
+def needs_review(confidence: float, report: ValidationReport) -> bool:
+    """Whether the review screen should open with fields flagged.
+
+    Here rather than inline in the endpoint because the eval suite has to reach
+    the same verdict from the same inputs. Measuring a copy of this expression
+    would measure the copy: the two would agree until someone changed one, which
+    is exactly the regression worth catching.
+    """
+    return (
+        confidence < REVIEW_CONFIDENCE_THRESHOLD
+        or bool(report.warnings)
+        or bool(report.dropped_fields)
+    )
 
 
 def build_job_draft(

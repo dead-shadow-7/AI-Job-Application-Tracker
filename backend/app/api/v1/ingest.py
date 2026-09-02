@@ -23,18 +23,13 @@ from app.core.exceptions import InvalidOperationError
 from app.schemas.extraction import ExtractedJob
 from app.schemas.ingest import DuplicateHint, IngestPreview, IngestRequest
 from app.services.applications import content_hash, job_embedding_text
-from app.services.job_drafts import build_job_draft
+from app.services.job_drafts import build_job_draft, needs_review
 from app.services.search import find_near_duplicate
 from app.services.skills import SkillResolution
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/jobs", tags=["ingest"])
-
-# Below this, the review screen opens with fields flagged rather than merely
-# available. The model reports its own confidence; validation warnings override
-# it, since a confident extraction with a discarded salary still needs eyes.
-REVIEW_CONFIDENCE_THRESHOLD = 0.75
 
 
 @router.post(
@@ -73,16 +68,10 @@ async def ingest(payload: IngestRequest, user: CurrentUser, session: DbSession) 
 
     job = build_job_draft(state, url=payload.url, source_platform=payload.source_platform)
 
-    needs_review = (
-        extracted.confidence < REVIEW_CONFIDENCE_THRESHOLD
-        or bool(report.warnings)
-        or bool(report.dropped_fields)
-    )
-
     return IngestPreview(
         job=job,
         confidence=Decimal(str(round(extracted.confidence, 2))),
-        needs_review=needs_review,
+        needs_review=needs_review(extracted.confidence, report),
         warnings=report.warnings,
         dropped_fields=report.dropped_fields,
         unmatched_skills=skills.unmatched,

@@ -16,8 +16,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 # Bump when the prompt or this schema changes in a way that alters output.
-# Stored on every job so historical extractions stay interpretable and the eval
-# suite can attribute a regression to a specific version.
+#
+# Returned on the ingest preview (IngestPreview.prompt_version) and tagged into
+# every LangSmith ingestion run, so a live extraction can be attributed. It is
+# NOT stored on the saved job — `jobs` has no such column, and create_job does
+# not write extraction_confidence or extraction_model either. So a regression is
+# attributable in a trace or in an eval run, but not by querying rows after the
+# fact. The eval suite reads this constant directly rather than the database.
 EXTRACTION_PROMPT_VERSION = "2026-08-30.2"
 
 

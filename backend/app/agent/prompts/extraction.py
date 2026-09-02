@@ -1,11 +1,14 @@
 """The extraction prompt.
 
-Versioned in `app/schemas/extraction.py` as EXTRACTION_PROMPT_VERSION and stored
-on every job, so a later accuracy regression can be attributed to a specific
-prompt rather than guessed at.
+Versioned in `app/schemas/extraction.py` as EXTRACTION_PROMPT_VERSION, which is
+returned on the ingest preview and tagged onto the LangSmith run — but is not
+stored on the saved job. See the note beside the constant.
 
 The rules below are not generic prompt hygiene — each one exists because of a
-specific way extraction goes wrong on real postings.
+specific way extraction goes wrong on real postings. Each is numbered, and the
+eval suite pins them one to a case: `backend/evals/cases/extraction.jsonl`
+carries a `rule` field naming which one it holds. Editing a rule here without
+running the eval is how a fix for one posting quietly breaks three others.
 """
 
 EXTRACTION_SYSTEM_PROMPT = """\

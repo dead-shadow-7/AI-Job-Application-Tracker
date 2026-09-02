@@ -110,6 +110,18 @@ ignore_missing_imports = true
 asyncio_mode = "auto"
 testpaths = ["tests"]
 
+# Both of these are deselected by default, for different reasons, and the
+# default is the whole point: CI runs a bare `pytest -q` with no API keys, and
+# nothing should change that by accident. A command-line `-m` replaces the one
+# below rather than combining with it, so `pytest -m eval` works — which is also
+# why the eval suite carries a second, independent LLM_EVAL gate. One stops
+# collection; the other stops spending.
+markers = [
+    "eval: spends real tokens against a live provider; deselected by default",
+    "embeddings_real: downloads and runs the real embedding model (~130 MB)",
+]
+addopts = "-m 'not eval and not embeddings_real'"
+
 # Required for `from tests.factories import ...` to resolve.
 #
 # `python -m pytest` puts the working directory on sys.path; a bare `pytest`
