@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 # not write extraction_confidence or extraction_model either. So a regression is
 # attributable in a trace or in an eval run, but not by querying rows after the
 # fact. The eval suite reads this constant directly rather than the database.
-EXTRACTION_PROMPT_VERSION = "2026-08-30.2"
+EXTRACTION_PROMPT_VERSION = "2026-09-02.1"
 
 
 class ExtractedSalary(BaseModel):
