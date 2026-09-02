@@ -18,12 +18,14 @@ something nobody asked for.
 """
 
 import json
+from datetime import timedelta
 from typing import Any
 
 import httpx
 import pytest
 
 from app.agent.llm_client import LLMClient, LLMError, TextDelta, TurnComplete
+from app.schemas.extraction import ExtractedJob
 
 
 def install(monkeypatch: pytest.MonkeyPatch, *chunks: dict[str, Any]) -> LLMClient:
@@ -167,3 +169,42 @@ async def test_the_provider_s_own_error_survives_a_streamed_request(
 
     with pytest.raises(LLMError, match="stream_options unsupported"):
         await collect(client, "hello")
+
+
+async def test_a_truncated_extraction_raises_on_the_unstreamed_path_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same guard, on the call that has no stream to watch.
+
+    Structured extraction is where truncation is most deceptive: the reply is
+    valid JSON right up to the point it stops, so a cut-off response can parse
+    into a job with half its fields missing and be saved as a real extraction.
+    Nothing in the model layer objects — `finish_reason` is a field on an
+    otherwise ordinary message — so this has to be checked deliberately.
+    """
+
+    def truncated(_: httpx.Request) -> httpx.Response:
+        response = httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": '{"company_name": "Ac'},
+                        "finish_reason": "length",
+                    }
+                ],
+                "usage": {"prompt_tokens": 900, "completion_tokens": 3000, "total_tokens": 3900},
+            },
+        )
+        response.elapsed = timedelta(milliseconds=10)
+        return response
+
+    monkeypatch.setattr(
+        "app.agent.models.get_http_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(truncated)),
+    )
+    client = LLMClient(api_key="test-key", base_url="https://example.invalid/v1")
+
+    with pytest.raises(LLMError, match="output ceiling"):
+        await client.extract(schema=ExtractedJob, system="s", user="u")

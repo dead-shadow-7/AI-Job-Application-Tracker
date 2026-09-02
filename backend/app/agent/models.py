@@ -13,11 +13,9 @@ default rather than a preference. They are listed in the tests next to what
 breaks without them, because none of the three fails loudly.
 """
 
-from typing import Any
-
 from langchain_core.language_models import LanguageModelInput
 from langchain_core.messages import BaseMessage
-from langchain_core.runnables import Runnable
+from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
 
 from app.agent.http_client import get_http_client, get_sync_http_client
@@ -70,7 +68,7 @@ def build_chat_model(
     return chat.bind(max_completion_tokens=max_output_tokens)
 
 
-def chat_model_config(model: str) -> dict[str, Any]:
+def chat_model_config(model: str) -> RunnableConfig:
     """Per-invocation config naming the provider LangSmith should price against.
 
     ``ChatOpenAI`` reports ``ls_provider="openai"`` for all three hosts, because

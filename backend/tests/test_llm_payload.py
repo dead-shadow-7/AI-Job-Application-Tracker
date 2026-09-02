@@ -37,7 +37,7 @@ from app.schemas.extraction import ExtractedJob, to_strict_json_schema
 # The accessor each path fetches its pooled client from. One line each, so a
 # path that moves to a different builder re-points its own tests and nothing
 # else.
-EXTRACT_HTTP = "app.agent.llm_client.get_http_client"
+EXTRACT_HTTP = "app.agent.models.get_http_client"
 CHAT_HTTP = "app.agent.llm_client.get_http_client"
 
 BASE_URL = "https://example.invalid/v1"
@@ -179,12 +179,15 @@ async def test_extraction_does_not_stream(monkeypatch: pytest.MonkeyPatch) -> No
     Recorded rather than assumed: on the chat-completions API a request that
     carries ``response_format`` is sent unstreamed, so anyone who later wants
     both should find this test rather than discover the interaction.
+
+    The field is now sent explicitly as false where it used to be omitted —
+    the same request, stated rather than implied.
     """
     recorder = install(monkeypatch, EXTRACT_HTTP, completion(EXTRACTED))
 
     await client().extract(schema=ExtractedJob, system="s", user="u")
 
-    assert "stream" not in recorder.sent
+    assert recorder.sent["stream"] is False
     assert "stream_options" not in recorder.sent
 
 

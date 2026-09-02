@@ -15,12 +15,15 @@ import random
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from time import perf_counter
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 import httpx
+import openai
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 from pydantic import BaseModel, ValidationError
 
 from app.agent.http_client import close_http_client, get_http_client
+from app.agent.models import ChatModel, build_chat_model, chat_model_config
 from app.agent.tracing import as_llm_run, hide, record_model, traced
 from app.core.config import settings
 from app.core.exceptions import DomainError
@@ -108,6 +111,26 @@ class TurnComplete:
 StreamEvent = TextDelta | TurnComplete
 
 
+def _usage_of(message: AIMessage, model: str, latency_ms: int) -> LLMUsage:
+    """Token counts, translated out of LangChain's provider-neutral shape.
+
+    ``cache_read`` is the one worth naming. Groq reports it as
+    ``prompt_tokens_details.cached_tokens`` and LangChain normalises it here; if
+    that normalisation ever stopped applying to a non-OpenAI host, every cost
+    figure would roughly double without anything failing.
+    """
+    usage: dict[str, Any] = dict(message.usage_metadata or {})
+    details = usage.get("input_token_details") or {}
+    return LLMUsage(
+        model=model,
+        prompt_tokens=usage.get("input_tokens", 0),
+        completion_tokens=usage.get("output_tokens", 0),
+        total_tokens=usage.get("total_tokens", 0),
+        cached_tokens=details.get("cache_read", 0),
+        latency_ms=latency_ms,
+    )
+
+
 def _stream_run(outputs: Any) -> dict[str, Any]:
     """Reshape a streamed turn into what LangSmith prices a run from.
 
@@ -172,34 +195,42 @@ class LLMClient:
             raise LLMError("GROQ_API_KEY is not set.")
 
         target_model = model or settings.extraction_model
-        payload: dict[str, Any] = {
-            "model": target_model,
-            "temperature": temperature,
+        chat = build_chat_model(
+            model=target_model,
             # Counted against the tokens-per-minute budget *before* generation,
             # so an optimistic ceiling here fails the request outright on the
             # free tier rather than merely allowing a long answer. A full
             # extraction runs well under 3k.
-            "max_completion_tokens": max_tokens or settings.llm_max_output_tokens,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "response_format": {
+            max_output_tokens=max_tokens or settings.llm_max_output_tokens,
+            api_key=self._api_key,
+            base_url=self._base_url,
+            temperature=temperature,
+        ).bind(
+            # Bound as a dict rather than handed the Pydantic class, and this is
+            # the load-bearing choice in the whole file. A dict already shaped as
+            # a json_schema response format is forwarded untouched, so what
+            # `to_strict_json_schema` produced is what Groq receives. Passing the
+            # class instead would let the SDK render the schema itself — losing
+            # the `$ref` inlining that Groq's validator requires, on a path no
+            # test can see because the extraction stub replaces this method.
+            response_format={
                 "type": "json_schema",
                 "json_schema": {
                     "name": schema.__name__.lower(),
                     "strict": True,
                     "schema": to_strict_json_schema(schema),
                 },
-            },
-        }
+            }
+        )
 
-        body, usage = await self._post(payload, target_model)
+        message, latency_ms = await self._invoke(
+            chat, [SystemMessage(system), HumanMessage(user)], target_model
+        )
+        usage = _usage_of(message, target_model, latency_ms)
         record_model(usage.model, settings.llm_provider)
-        content = body["choices"][0]["message"]["content"]
 
         try:
-            return StructuredResult(data=schema.model_validate_json(content), usage=usage)
+            return StructuredResult(data=schema.model_validate_json(message.text), usage=usage)
         except ValidationError as exc:
             logger.error("Model returned schema-invalid JSON for %s: %s", schema.__name__, exc)
             raise LLMError(
@@ -411,67 +442,75 @@ class LLMClient:
             ),
         )
 
-    async def _post(self, payload: dict[str, Any], model: str) -> tuple[dict[str, Any], LLMUsage]:
+    async def _invoke(
+        self, chat: ChatModel, messages: list[BaseMessage], model: str
+    ) -> tuple[AIMessage, int]:
+        """One completion, retried on the statuses this provider means by them.
+
+        The SDK has a retry loop of its own and it is switched off in
+        ``build_chat_model``, for two reasons. Its set omits 413 — the status
+        Groq returns for token-rate exhaustion — and leaving both on would
+        multiply the attempts inside a request deadline sized for one of them.
+        """
         last_error: Exception | None = None
         final_attempt = settings.llm_max_retries - 1
 
         for attempt in range(settings.llm_max_retries):
+            started = perf_counter()
             try:
-                # Fetched per attempt, not once above the loop: a shutdown
-                # during the seconds this loop can sleep would otherwise leave
-                # us holding a closed client and raising RuntimeError.
-                response = await get_http_client().post(
-                    f"{self._base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {self._api_key}"},
-                    json=payload,
-                )
-            except (httpx.RequestError, RuntimeError) as exc:
+                message = await chat.ainvoke(messages, config=chat_model_config(model))
+            except openai.LengthFinishReasonError as exc:
+                # The SDK notices truncation first when a response_format is set,
+                # and raises something that is deliberately *not* an APIError —
+                # so it would sail past every handler below and out of this
+                # module as a 500, taking /chat's 422 and matching's graceful
+                # degrade with it. Retrying is pointless: the ceiling is the
+                # same next time. Reworded to say which knob to turn.
+                raise LLMError(
+                    f"{model} hit the output ceiling before finishing. "
+                    "Ask for less at once, or raise LLM_CHAT_OUTPUT_TOKENS."
+                ) from exc
+            except openai.APIStatusError as exc:
+                detail = self._error_message(exc.response)
+                if exc.status_code in RETRYABLE_STATUS:
+                    last_error = LLMError(detail)
+                    logger.warning(
+                        "Groq %s (attempt %d/%d): %s",
+                        exc.status_code,
+                        attempt + 1,
+                        settings.llm_max_retries,
+                        detail,
+                    )
+                    # Honour Retry-After when the limiter supplies it; guessing
+                    # shorter just burns the next attempt against the same window.
+                    if attempt < final_attempt:
+                        await self._backoff(attempt, exc.response.headers.get("retry-after"))
+                    continue
+
+                logger.error("Groq %s rejected the request: %s", exc.status_code, detail)
+                raise LLMError(detail) from exc
+            except (openai.APIError, httpx.RequestError, RuntimeError) as exc:
+                # Timeouts and connection failures, plus the bare RuntimeError a
+                # pooled connection raises once its event loop has closed.
                 last_error = exc
                 # Sleeping after the last attempt delays only the exception.
                 if attempt < final_attempt:
                     await self._backoff(attempt)
                 continue
 
-            if response.status_code == 200:
-                body = response.json()
-                # A truncated answer is otherwise completely silent: the choice
-                # comes back with empty content and no tool_calls, the assistant
-                # loop reads that as "nothing to say", and the user gets a
-                # shrug instead of an error while their turn is still recorded.
-                if (body.get("choices") or [{}])[0].get("finish_reason") == "length":
-                    raise LLMError(
-                        f"{model} hit the output ceiling before finishing. "
-                        "Ask for less at once, or raise LLM_CHAT_OUTPUT_TOKENS."
-                    )
-                raw = body.get("usage", {})
-                return body, LLMUsage(
-                    model=model,
-                    prompt_tokens=raw.get("prompt_tokens", 0),
-                    completion_tokens=raw.get("completion_tokens", 0),
-                    total_tokens=raw.get("total_tokens", 0),
-                    cached_tokens=(raw.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
-                    latency_ms=int(response.elapsed.total_seconds() * 1000),
+            # A truncated answer is otherwise completely silent: the choice comes
+            # back with empty content and no tool_calls, the assistant loop reads
+            # that as "nothing to say", and the user gets a shrug instead of an
+            # error while their turn is still recorded. Nothing in LangChain
+            # raises on this; it is an ordinary message with a field set.
+            if message.response_metadata.get("finish_reason") == "length":
+                raise LLMError(
+                    f"{model} hit the output ceiling before finishing. "
+                    "Ask for less at once, or raise LLM_CHAT_OUTPUT_TOKENS."
                 )
-
-            message = self._error_message(response)
-
-            if response.status_code in RETRYABLE_STATUS:
-                last_error = LLMError(message)
-                logger.warning(
-                    "Groq %s (attempt %d/%d): %s",
-                    response.status_code,
-                    attempt + 1,
-                    settings.llm_max_retries,
-                    message,
-                )
-                # Honour Retry-After when the limiter supplies it; guessing
-                # shorter just burns the next attempt against the same window.
-                if attempt < final_attempt:
-                    await self._backoff(attempt, response.headers.get("retry-after"))
-                continue
-
-            logger.error("Groq %s rejected the request: %s", response.status_code, message)
-            raise LLMError(message)
+            # A chat model always answers with an AIMessage; the Runnable
+            # signature is the generic one and cannot say so.
+            return cast(AIMessage, message), int((perf_counter() - started) * 1000)
 
         raise LLMError(f"Groq unreachable after {settings.llm_max_retries} attempts: {last_error}")
 

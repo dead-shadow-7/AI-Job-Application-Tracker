@@ -31,7 +31,7 @@ from app.agent.llm_client import LLMClient, LLMError
 from app.core.config import settings
 from app.schemas.extraction import ExtractedJob
 
-HTTP = "app.agent.llm_client.get_http_client"
+HTTP = "app.agent.models.get_http_client"
 BASE_URL = "https://example.invalid/v1"
 
 OK_CONTENT = {
