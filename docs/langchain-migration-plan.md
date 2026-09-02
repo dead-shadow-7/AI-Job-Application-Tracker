@@ -585,3 +585,38 @@ Commits 1–2 are shippable and useful on their own even if the migration is aba
 - `D:\projects\AI_Job_Tracker\backend\tests\conftest.py`
 - `D:\projects\AI_Job_Tracker\backend\app\agent\graphs\ingestion.py`
 - `D:\projects\AI_Job_Tracker\backend\pyproject.toml`
+---
+
+## 8. Outcome — what the unknowns turned out to be
+
+Recorded after the fact, because five of the seven were resolved by measurement
+rather than by reading, and the answers are what the code now depends on.
+
+| # | Unknown | Resolved as |
+|---|---|---|
+| **a** | Do the providers honour `"strict": true`? | **Yes, on aicredits.** A live extraction of a real posting returned a valid `ExtractedJob` twice, with the schema pinned. Groq and Gemini remain unprobed. |
+| **b** | Which `openai` major resolves? | **2.54.0**, so `http_async_client` still takes a plain `httpx.AsyncClient` and the pool, the split timeout and the loop keying all carried across unchanged. Pinned `<3` and guarded by `tests/test_dependencies.py`. Note `httpx2` is now installed anyway as a langsmith dependency — the pin is about which one the *SDK* uses, and the test asserts exactly that. |
+| **c** | Does an injected client disable the SDK's retries? | **Moot.** `max_retries=0` and one timeout value make the composition question unnecessary; `tests/test_llm_retry.py` counts the attempts that reach the transport. |
+| **d** | Is `.parse()` safe against non-OpenAI bodies? | **Yes**, on Groq-shaped and aicredits bodies, both in tests and live. It also surfaced something the plan did not predict — see below. |
+| **e** | Streaming plus `response_format`? | **Mutually exclusive, and neither path wants both.** Extraction now sends `"stream": false` explicitly where it used to omit the field; asserted in `test_llm_payload.py`. |
+| **f** | The langgraph 0.2 → 1.2 delta for this DAG? | **Already paid.** The container had been resolving 1.2.11 under a `>=0.2.60` floor for some time and the suite was green. Only `set_entry_point` → `add_edge(START, …)` changed. The topology is now asserted so the next major is a decision. |
+| **g** | Does LangSmith price these model ids? | **Still open.** Needs a live traced run; `ls_provider` is set to the real provider so the question is about the catalogue, not the metadata. |
+
+### The thing the plan missed
+
+`openai.LengthFinishReasonError`. When a `response_format` is set, the SDK
+notices truncation before any of our code does — and raises something that is
+deliberately *not* an `APIError`, so it passed every handler and left the module
+uncaught. `LLMError` is absent from the domain-error status table, so that would
+have been a 500 in place of `/chat`'s 422, the in-stream error frame on
+`/chat/stream`, and the graceful score-from-85% degrade in matching. It is
+mapped now, and the explicit `finish_reason` check stays for the paths that set
+no response format.
+
+### Risk #3 closed by measurement
+
+`cache_read` was the risk rated most likely to silently double the reported
+cost. A live second extraction of the same posting reported `cached=1664` of
+1699 prompt tokens, so Groq's `prompt_tokens_details.cached_tokens` does survive
+LangChain's normalisation on a non-OpenAI host. Covered by `test_tracing.py` at
+three levels, including one streamed turn end to end.
