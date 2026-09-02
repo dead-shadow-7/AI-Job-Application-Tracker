@@ -25,6 +25,17 @@ class BudgetExceeded(RuntimeError):
 
 
 def _git_sha() -> str:
+    """Which commit produced these numbers.
+
+    Read from the environment first because the usual way to run this is inside
+    the container, where only `backend/` is mounted — the repository, and so
+    `git`, is on the host. Without the override every run records "unknown",
+    which quietly removes the one field that makes two runs attributable:
+
+        docker compose exec -e LLM_EVAL=1 -e EVAL_GIT_SHA=$(git rev-parse --short HEAD) ...
+    """
+    if sha := os.environ.get("EVAL_GIT_SHA", "").strip():
+        return sha
     try:
         return subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"],
