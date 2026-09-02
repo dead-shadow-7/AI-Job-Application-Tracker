@@ -108,17 +108,15 @@ paid (INR/UPI, ~10% over list) with no token ceiling at all, which is why it is
 the default. All three speak the OpenAI dialect, so switching is a key, a base
 URL, and a model.
 
-`openai/gpt-4o-mini` was chosen by measurement, not by price list. Four
-candidates were scored on a 10-case tool-selection eval against the real 20-tool
-schema, and on salary extraction — the field most likely to be wrong and least
-likely to be re-read. Cost is relative to the cheapest, on an identical workload:
+`openai/gpt-4o-mini` was chosen by measurement, not by price list — scored on
+tool selection against the real tool schema, and on salary extraction, the field
+most likely to be wrong and least likely to be re-read. The numbers live in
+[docs/eval-ledger.md](docs/eval-ledger.md) and are reproducible now rather than
+recorded by hand:
 
-| Model | Tool selection | Salary | Relative cost |
-| --- | --- | --- | --- |
-| `openai/gpt-oss-120b` | 9/10 | **wrong** | 1.0× |
-| `openai/gpt-4.1-nano` | 6/10 | ok | 2.2× |
-| **`openai/gpt-4o-mini`** | **10/10** | **ok** | **3.4×** |
-| `openai/gpt-5-nano` | 9/10 | ok | 4.6× |
+```bash
+docker compose exec -e LLM_EVAL=1 backend python -m pytest -m eval -q
+```
 
 Two results are worth keeping. `gpt-oss-120b` read "45–60 LPA" as 45 to 60
 rupees, reproducibly — the same model id that reads it correctly on Groq, which
@@ -240,10 +238,10 @@ frontend/
 | 5 | Semantic search, dedup, analytics | done |
 | 6 | Vercel + EC2 deployment, daily sweep | next |
 
-Known gaps, deliberately: there is no extraction eval set, so a prompt change is
-caught by review rather than by a test; the skill taxonomy has no mobile
-entries, so a role asking for Swift is refused; and the follow-up sweep runs on
-request rather than on a schedule, which is what Phase 6 adds.
+Known gaps, deliberately: the skill taxonomy has no mobile entries, so a role
+asking for Swift is refused; and the follow-up sweep runs on request rather than
+on a schedule, which is what Phase 6 adds. The extraction eval set that used to
+be listed here now exists — `backend/evals/`, opt-in and about a rupee a run.
 
 ## Extraction refuses to guess
 

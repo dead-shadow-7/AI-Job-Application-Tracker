@@ -99,17 +99,12 @@ class Settings(BaseSettings):
     # listed as chat, o1-mini's context length off by 16x). Treat it as "what
     # the API accepts as a model string", not as a capability sheet.
     #
-    # gpt-4o-mini from measurement, not taste. Four candidates, scored on a
-    # 10-case tool-selection eval against the real 20-tool schema and on the
-    # salary field twice — salary being the one most likely to be wrong and
-    # least likely to be re-read once it is in the table. Monthly cost assumes
-    # 300 assistant messages and 40 pasted postings, priced from the platform's
-    # own catalogue:
-    #
-    #   gpt-oss-120b   9/10   salary WRONG    Rs 3.62
-    #   gpt-4.1-nano   6/10   salary ok       Rs 8.08
-    #   gpt-4o-mini   10/10   salary ok       Rs 12.34
-    #   gpt-5-nano     9/10   salary ok       Rs 16.77
+    # gpt-4o-mini from measurement, not taste — scored on tool selection against
+    # the real tool schema and on the salary field, salary being the one most
+    # likely to be wrong and least likely to be re-read once it is in the table.
+    # The scores live in docs/eval-ledger.md and are reproducible with
+    # `pytest -m eval`; the whole spread was about Rs 13 a month, so the numbers
+    # matter less than the two findings below.
     #
     # Two results worth keeping. gpt-oss-120b read "45-60 LPA" as 45 to 60
     # rupees, twice — a hundred-thousand-fold error, from the same model id that
