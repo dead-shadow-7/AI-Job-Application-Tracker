@@ -93,7 +93,7 @@ cache with exactly one writer.
 | Auth | Supabase Auth — magic link + Google |
 | LLM | AI Credits `openai/gpt-4o-mini`, or Groq, or Gemini — set `LLM_PROVIDER` |
 | Embeddings | fastembed + `BAAI/bge-small-en-v1.5`, local — Phase 3 |
-| Agent | LangGraph + LangSmith — Phase 2/4 |
+| Agent | LangChain (`ChatOpenAI`, one class per provider host) + LangGraph + LangSmith |
 
 Neither Groq nor most chat providers serve embedding models, which is why
 embeddings run locally rather than through the same provider.
@@ -216,7 +216,7 @@ backend/
     models/    SQLAlchemy models
     schemas/   Pydantic request/response
     api/v1/    routers
-    agent/     LangGraph graphs and tools (Phase 2+)
+    agent/     chat model, LangGraph ingestion DAG, assistant loop and tools
     services/  business logic
   alembic/versions/
   tests/
