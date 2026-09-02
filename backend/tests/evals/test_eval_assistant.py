@@ -11,6 +11,8 @@ other's applications. Slower, and the alternative is a flaky eval, which is
 worse than a slow one.
 """
 
+from time import perf_counter
+
 import pytest
 
 from app.agent.assistant import run_assistant
@@ -52,6 +54,9 @@ async def run_one(case: Case, client, calls: list[dict], run: RunRecorder) -> Ca
     user = await Session(client).start()
     await build(case.get("seed", "empty"), user)
 
+    # Timed from here, after seeding: a turn's cost to the user is the model
+    # round trips, not the fixture setup this eval does and production does not.
+    started = perf_counter()
     try:
         async for session in open_user_session(user.user_id):
             result = await run_assistant(session, user.user_id, case.get("message"))
@@ -64,6 +69,7 @@ async def run_one(case: Case, client, calls: list[dict], run: RunRecorder) -> Ca
     run.spend(result.total_tokens)
     score = score_assistant(case, result.message, list(calls))
     score.tokens = result.total_tokens
+    score.latency_ms = int((perf_counter() - started) * 1000)
 
     # Declared separately from the tool metrics because it is about the *turn*
     # rather than about a call: an ambiguous reference must produce a question,

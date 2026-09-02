@@ -43,8 +43,10 @@ resume text.
 | 2026-09-02 | `openai/gpt-4o-mini` (aicredits) | 22 | 2026-09-02.1 / 2026-09-01.8 / 2026-08-30.1 | 1.000 | 1.000 | 1.000 | 0.667 | 1.000 | 201k |
 
 **First recorded run**, and the baseline the thresholds are set from. 28
-extraction cases, 20 assistant cases, 12 rubric cases; ~₹6 and about two and a
-half minutes.
+extraction cases, 20 assistant cases, 12 rubric cases; 201,381 tokens and
+about two and a half minutes. That is roughly ₹4-6 on this gateway — the run
+records only a total, not the input/output split, and the two are priced four
+times apart, so the range is the honest figure rather than the midpoint.
 
 It settles the disagreement: **gpt-4o-mini scores 10/10 on tool selection
 against the real 22-tool schema.** `.env.example` was the accurate record of the
@@ -77,3 +79,17 @@ the mean 33 points, so this number is noisy — more cases before raising it.
 **Nothing else moved.** Every other gated metric is 1.000, including the four
 hard-gated rubric cases where a requirement with no supporting passage must be
 reported as a gap and must not appear as a strength.
+
+### How much to read into it
+
+Not as much as the column of 1.000s suggests. Several metrics rest on very few
+cases — `query_fidelity` on 2, `forbidden_tool` on 4, `skill_recall` on 3 — and
+a perfect score on two cases is not evidence of a perfect model. `skill_precision`
+(28) and `no_invented_dates` (20) are the two that carry real weight, and both
+are safety properties rather than quality ones.
+
+This is also one run. Nothing here says how much these move between runs at
+temperature 0, so a single case flipping would look like a regression. The
+corpus is synthetic and written by the same person who wrote the prompts, which
+biases it toward the failures already thought of — the injection case earned its
+place precisely because it was one that had not been.
